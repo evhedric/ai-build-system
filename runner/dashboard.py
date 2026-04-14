@@ -24,7 +24,9 @@ try:
     from rich.columns import Columns
     from rich import box
     _rich_available = True
-    console = Console()
+    # force_terminal=True + no_color=False prevents the legacy Windows console
+    # renderer that fails on non-cp1252 characters
+    console = Console(force_terminal=True, highlight=False)
 except ImportError:
     _rich_available = False
 
@@ -43,15 +45,15 @@ STATUS_COLORS = {
 }
 
 STATUS_ICONS = {
-    "pending":              "⏳",
-    "planning":             "🏛 ",
-    "ready_for_execution":  "📋",
-    "executing":            "⚙ ",
-    "in_review":            "🔍",
-    "approved":             "✅",
-    "revise":               "🔄",
-    "complete":             "✓ ",
-    "failed":               "✗ ",
+    "pending":              "[ ]",
+    "planning":             "[~]",
+    "ready_for_execution":  "[>]",
+    "executing":            "[*]",
+    "in_review":            "[?]",
+    "approved":             "[+]",
+    "revise":               "[!]",
+    "complete":             "[OK]",
+    "failed":               "[X]",
 }
 
 
