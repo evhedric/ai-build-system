@@ -90,7 +90,7 @@ def process_task(task: dict) -> dict:
                 task = handle_post_approval(task, review)
                 task = transition_task(task_id, "complete")
                 runner_log.info(
-                    "[%s] ✓ TASK COMPLETE — score=%d/10",
+                    "[%s] TASK COMPLETE (score=%d/10)",
                     task_id, review.get("score", "?")
                 )
                 log_execution_event(task_id, "TASK COMPLETE")
@@ -114,8 +114,7 @@ def process_task(task: dict) -> dict:
                 # Incorporate reviewer feedback into the plan for the next execution
                 # by appending revision instructions to step details
                 plan = _apply_revision_feedback(plan, review)
-
-                task = transition_task(task_id, "ready_for_execution")
+                # State is now "revise" — the loop top will transition to "executing"
 
     except Exception as e:
         log_error(task_id, "pipeline", e)

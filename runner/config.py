@@ -8,8 +8,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env from the project root
+# override=True ensures .env values win over empty system environment variables
 BASE_DIR = Path(__file__).parent.parent
-load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR / ".env", override=True)
 
 # --- API Keys ---
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")

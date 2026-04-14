@@ -67,7 +67,7 @@ def run_reviewer(task: dict, execution_result: dict) -> dict:
         if full_path.exists():
             try:
                 content = full_path.read_text(encoding="utf-8")
-                file_snapshots[file_path] = content[:3000]  # Cap at 3k chars per file
+                file_snapshots[file_path] = content[:12000]  # Cap at 12k chars per file
             except Exception:
                 file_snapshots[file_path] = "[could not read file]"
     if file_snapshots:

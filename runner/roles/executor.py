@@ -42,17 +42,29 @@ def _run_git(args: list[str], cwd: Path = BASE_DIR) -> tuple[int, str, str]:
     return result.returncode, result.stdout.strip(), result.stderr.strip()
 
 
+def _get_default_branch() -> str:
+    """Detect the repo's default branch (main, master, Claude-Workflow, etc.)."""
+    for candidate in ("main", "master", "Claude-Workflow"):
+        rc, out, _ = _run_git(["branch", "--list", candidate])
+        if candidate in out:
+            return candidate
+    # Fall back to current branch
+    _, out, _ = _run_git(["branch", "--show-current"])
+    return out or "main"
+
+
 def _ensure_branch(branch_name: str, task_id: str) -> None:
     """Create and checkout a new branch for this task."""
-    # Check if branch already exists
+    # Check if branch already exists locally
     rc, out, _ = _run_git(["branch", "--list", branch_name])
     if branch_name in out:
         executor_log.info("[%s] Branch already exists, checking out: %s", task_id, branch_name)
         rc, _, err = _run_git(["checkout", branch_name])
     else:
         executor_log.info("[%s] Creating branch: %s", task_id, branch_name)
-        # Make sure we're on main/Claude-Workflow first
-        _run_git(["checkout", "main"])
+        # Switch to the default base branch first
+        base = _get_default_branch()
+        _run_git(["checkout", base])
         rc, _, err = _run_git(["checkout", "-b", branch_name])
 
     if rc != 0:
@@ -115,7 +127,7 @@ def _execute_step(
     description = step.get("description", "")
 
     executor_log.info(
-        "[%s] Step %d: [%s] %s → %s",
+        "[%s] Step %d: [%s] %s -> %s",
         task["task_id"], step_id, action, description[:60], target
     )
 

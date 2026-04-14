@@ -88,14 +88,14 @@ def transition_task(task_id: str, new_status: str) -> dict:
     allowed = TRANSITIONS.get(current, [])
     if new_status not in allowed:
         raise ValueError(
-            f"Invalid transition for {task_id}: {current!r} → {new_status!r}. "
+            f"Invalid transition for {task_id}: {current!r} -> {new_status!r}. "
             f"Allowed: {allowed}"
         )
 
     task["status"] = new_status
     save_task(task)
     _sync_system_state(task_id, new_status)
-    log_execution_event(task_id, f"STATUS CHANGE: {current} → {new_status}")
+    log_execution_event(task_id, f"STATUS CHANGE: {current} -> {new_status}")
     return task
 
 
@@ -106,7 +106,7 @@ def transition_task_to_failed(task_id: str, reason: str) -> dict:
     task["failure_reason"] = reason
     save_task(task)
     _sync_system_state(task_id, "failed")
-    log_execution_event(task_id, "STATUS CHANGE: → failed", reason)
+    log_execution_event(task_id, "STATUS CHANGE: -> failed", reason)
     return task
 
 
