@@ -22,7 +22,7 @@ def _create_logger(name: str, log_file: Path, level: int = logging.DEBUG) -> log
         return logger  # Already configured
 
     fmt = logging.Formatter(
-        "%(asctime)s  [%(levelname)-8s]  %(name)s  —  %(message)s",
+        "%(asctime)s  [%(levelname)-8s]  %(name)s  --  %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
@@ -31,8 +31,9 @@ def _create_logger(name: str, log_file: Path, level: int = logging.DEBUG) -> log
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(fmt)
 
-    # Console handler (INFO and above)
-    ch = logging.StreamHandler(sys.stdout)
+    # Console handler (INFO and above) — use UTF-8 to support Windows terminals
+    _stdout = open(sys.stdout.fileno(), mode="w", encoding="utf-8", buffering=1, closefd=False)
+    ch = logging.StreamHandler(_stdout)
     ch.setLevel(logging.INFO)
     ch.setFormatter(fmt)
 

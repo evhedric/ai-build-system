@@ -1,17 +1,33 @@
 {
   "task_id": "task-TEST0001",
   "created_at": "2026-04-14T00:00:00Z",
-  "updated_at": "2026-04-14T00:00:00Z",
-  "status": "pending",
+  "updated_at": "2026-04-14T20:12:38Z",
+  "status": "complete",
   "request": "Generate a README explaining the system architecture, workflow, and usage.",
-  "title": "Generate README for AI Orchestration System",
-  "goals": [],
-  "constraints": [],
-  "success_criteria": [],
-  "tags": ["documentation"],
-  "priority": "high",
+  "title": "Generate a README for system architecture and usage",
+  "goals": [
+    "Explain the system architecture in the README",
+    "Describe the workflow of the system in the README",
+    "Provide usage instructions for the system in the README"
+  ],
+  "constraints": [
+    "Output must be in Markdown format",
+    "Do not include any proprietary or sensitive information"
+  ],
+  "success_criteria": [
+    "README includes a clear section on system architecture",
+    "README includes a detailed workflow description",
+    "README provides step-by-step usage instructions",
+    "README is formatted correctly in Markdown"
+  ],
+  "tags": [
+    "documentation",
+    "system architecture",
+    "usage guide"
+  ],
+  "priority": "medium",
   "revision_count": 0,
   "max_revisions": 3,
-  "branch_name": "",
+  "branch_name": "task/task-TEST0001/generate-a-readme-for-system-architecture-and-usag",
   "pr_url": ""
 }

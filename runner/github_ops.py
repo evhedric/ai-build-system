@@ -69,7 +69,7 @@ def create_pull_request(task: dict, review: dict) -> str | None:
         "gh", "pr", "create",
         "--title", title,
         "--body", body,
-        "--base", "main",
+        "--base", "Claude-Workflow",
         "--head", branch_name,
     ])
 
