@@ -1,0 +1,17 @@
+{
+  "task_id": "task-TEST0001",
+  "created_at": "2026-04-14T00:00:00Z",
+  "updated_at": "2026-04-14T00:00:00Z",
+  "status": "pending",
+  "request": "Generate a README explaining the system architecture, workflow, and usage.",
+  "title": "Generate README for AI Orchestration System",
+  "goals": [],
+  "constraints": [],
+  "success_criteria": [],
+  "tags": ["documentation"],
+  "priority": "high",
+  "revision_count": 0,
+  "max_revisions": 3,
+  "branch_name": "",
+  "pr_url": ""
+}

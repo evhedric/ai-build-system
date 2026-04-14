@@ -1,0 +1,14 @@
+# AI Orchestration System — Python Dependencies
+#
+# Install with:  pip install -r requirements.txt
+# Python 3.10+ required
+
+# Core AI providers
+openai>=1.30.0          # Architect, Planner, Reviewer roles
+anthropic>=0.28.0       # Executor role
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# Terminal dashboard (optional but recommended)
+rich>=13.0.0

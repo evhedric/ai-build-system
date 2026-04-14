@@ -1,0 +1,100 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "task",
+  "title": "Task Packet",
+  "description": "A structured task definition that flows through the orchestration pipeline",
+  "type": "object",
+  "required": ["task_id", "created_at", "status", "request"],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "Unique task identifier (e.g., task-A1B2C3D4)",
+      "pattern": "^task-[A-Z0-9]{8}$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp when the task was created"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of last state change"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "planning",
+        "ready_for_execution",
+        "executing",
+        "in_review",
+        "approved",
+        "revise",
+        "complete",
+        "failed"
+      ],
+      "description": "Current state in the pipeline state machine"
+    },
+    "request": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The original user request (natural language)"
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 80,
+      "description": "Short imperative title set by the Architect"
+    },
+    "goals": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "What needs to be accomplished (set by Architect)"
+    },
+    "constraints": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Limitations the Executor must respect"
+    },
+    "success_criteria": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Verifiable conditions for task completion (used by Reviewer)"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Category tags"
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["low", "medium", "high"],
+      "default": "medium"
+    },
+    "revision_count": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Number of times the task has been sent back for revision"
+    },
+    "max_revisions": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 3,
+      "description": "Maximum allowed revisions before the task is failed"
+    },
+    "branch_name": {
+      "type": "string",
+      "description": "Git branch created for this task"
+    },
+    "pr_url": {
+      "type": "string",
+      "description": "GitHub pull request URL (set after approval)"
+    },
+    "failure_reason": {
+      "type": "string",
+      "description": "Reason for failure (only present if status=failed)"
+    }
+  },
+  "additionalProperties": false
+}

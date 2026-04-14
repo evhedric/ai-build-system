@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "review",
+  "title": "Review Packet",
+  "description": "The Reviewer's evaluation of an execution result",
+  "type": "object",
+  "required": ["task_id", "reviewed_at", "decision", "score", "reasoning"],
+  "properties": {
+    "task_id": {
+      "type": "string"
+    },
+    "reviewed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["approved", "revise"],
+      "description": "The Reviewer's verdict"
+    },
+    "score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10,
+      "description": "Quality score (0=complete failure, 10=exceeds expectations)"
+    },
+    "reasoning": {
+      "type": "string",
+      "description": "Clear explanation of the decision"
+    },
+    "criteria_met": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Success criteria that were satisfied"
+    },
+    "criteria_failed": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Success criteria that were NOT satisfied"
+    },
+    "revision_requests": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Specific, actionable changes requested (only when decision=revise)"
+    },
+    "next_steps": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Suggested follow-up actions for a human (only when decision=approved)"
+    }
+  },
+  "additionalProperties": false
+}

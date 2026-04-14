@@ -1,0 +1,45 @@
+# Environment / secrets
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+.eggs/
+
+# Logs — keep structure, ignore content
+logs/*.log
+
+# State — do not commit live runner state
+state/system_state.json
+
+# Task / artifact files — committed per-task when relevant
+# Remove these lines if you want to track all artifacts in git:
+# tasks/*.json
+# plans/*.json
+# artifacts/*.json
+# reviews/*.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Distribution / packaging
+*.tar.gz
+*.zip

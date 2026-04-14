@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "system_state",
+  "title": "System State",
+  "description": "The live state of the AI orchestration runner",
+  "type": "object",
+  "required": ["last_updated", "runner_status", "active_tasks", "completed_tasks", "failed_tasks", "stats"],
+  "properties": {
+    "last_updated": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "runner_status": {
+      "type": "string",
+      "enum": ["running", "stopped"],
+      "description": "Whether the background runner is currently active"
+    },
+    "active_tasks": {
+      "type": "object",
+      "description": "Map of task_id → current_status for all in-progress tasks",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "completed_tasks": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Task IDs that have reached 'complete' status"
+    },
+    "failed_tasks": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Task IDs that have reached 'failed' status"
+    },
+    "stats": {
+      "type": "object",
+      "required": ["total_processed", "total_approved", "total_failed", "total_revisions"],
+      "properties": {
+        "total_processed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_approved": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_revisions": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "plan",
+  "title": "Plan Packet",
+  "description": "An ordered execution plan created by the Planner for a specific task",
+  "type": "object",
+  "required": ["task_id", "created_at", "branch_name", "steps"],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "Reference to the parent task"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "branch_name": {
+      "type": "string",
+      "description": "Git branch name for this task (e.g., task/task-A1B2C3D4/generate-readme)"
+    },
+    "estimated_complexity": {
+      "type": "string",
+      "enum": ["low", "medium", "high"],
+      "default": "medium"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Optional context or warnings for the executor"
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["step_id", "description", "action_type"],
+        "properties": {
+          "step_id": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Sequential step identifier"
+          },
+          "description": {
+            "type": "string",
+            "description": "Short imperative description of what this step does"
+          },
+          "action_type": {
+            "type": "string",
+            "enum": ["create_file", "modify_file", "run_command", "research", "document"],
+            "description": "The type of action the executor should take"
+          },
+          "target": {
+            "type": "string",
+            "description": "Relative file path or shell command (depends on action_type)"
+          },
+          "details": {
+            "type": "string",
+            "description": "Detailed instructions for how to execute this step"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
