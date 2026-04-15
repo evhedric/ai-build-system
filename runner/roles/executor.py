@@ -16,6 +16,8 @@ from pathlib import Path
 from runner.config import ANTHROPIC_API_KEY, CLAUDE_MODEL, PROMPTS_DIR, BASE_DIR
 from runner.logger import executor_log, log_execution_event
 from runner.schemas import make_execution_result, make_step_result, save_execution_result
+from runner.executor_guard import guard_run_command
+from runner.plan_validator import PlanValidationError
 
 try:
     import anthropic
@@ -156,10 +158,26 @@ def _execute_step(
             return make_step_result(step_id, "completed", output=output)
 
         elif action == "run_command":
-            # Run shell command
+            # Resolve the command string (stored in 'target' after normalisation,
+            # or in 'details' for legacy steps that skipped normalisation).
             cmd = target or step.get("details", "")
             if not cmd:
                 return make_step_result(step_id, "skipped", output="No command specified")
+
+            # Last-line-of-defence guard: re-validate the resolved command
+            # immediately before execution.  guard_run_command() expects the
+            # command under the "command" key, so we supply it explicitly.
+            try:
+                guard_run_command({"command": cmd})
+            except PlanValidationError as exc:
+                executor_log.error(
+                    "[%s] Step %d: BLOCKED by executor guard — %s",
+                    task["task_id"], step_id, exc,
+                )
+                return make_step_result(
+                    step_id, "failed",
+                    error=f"Executor guard blocked command: {exc}",
+                )
 
             executor_log.info("[%s] Step %d: Running command: %s", task["task_id"], step_id, cmd)
             result = subprocess.run(
