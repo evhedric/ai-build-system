@@ -27,6 +27,7 @@ from runner.roles.executor import run_executor
 from runner.roles.reviewer import run_reviewer
 from runner.github_ops import handle_post_approval
 from runner.plan_validator import PlanValidationError
+from runner.plan_regenerator import build_revision_feedback, should_fail_for_repeated_invalid_pattern
 
 
 def process_task(task: dict) -> dict:
@@ -51,12 +52,16 @@ def process_task(task: dict) -> dict:
         task = run_architect(task)
 
         # ---------------------------------------------------------------
-        # Stage 2: Initial plan
-        # run_planner() calls validate_plan() internally — if commands are
-        # invalid it raises PlanValidationError which lands in the outer
-        # except and marks the task failed with a descriptive reason.
+        # Stage 2: Plan generation with pre-execution validation retry
+        #
+        # run_planner() calls validate_plan() internally.  If the model
+        # produces invalid run_command steps, we feed the error back as
+        # revision_feedback and retry rather than immediately failing.
+        # should_fail_for_repeated_invalid_pattern() detects when the model
+        # is stuck producing the same bad command on successive attempts and
+        # escalates to a hard failure at that point.
         # ---------------------------------------------------------------
-        plan = run_planner(task)
+        plan = _generate_valid_plan(task_id, task)
         runner_log.info(
             "[%s] Plan valid (%d steps, branch=%s)",
             task_id, len(plan.get("steps", [])), plan["branch_name"],
@@ -140,9 +145,12 @@ def process_task(task: dict) -> dict:
                 # State is now "revise" — loop top transitions to "executing"
 
     except PlanValidationError as exc:
-        # Surface each bad step individually in the failure reason
+        # Reached only if _generate_valid_plan's loop-detection gave up
         log_error(task_id, "plan_validation", exc)
-        return transition_task_to_failed(task_id, f"Plan validation failed: {exc}")
+        return transition_task_to_failed(
+            task_id,
+            f"Planner stuck in invalid command loop: {exc}",
+        )
 
     except Exception as exc:
         log_error(task_id, "pipeline", exc)
@@ -152,6 +160,60 @@ def process_task(task: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _generate_valid_plan(task_id: str, task: dict) -> dict:
+    """
+    Call run_planner() in a retry loop, feeding validation errors back as
+    revision_feedback until the planner produces a valid plan.
+
+    Two separate pieces of state are maintained:
+      accumulated_feedback   — grows with every failure; sent to the planner
+                               so it has the full history of what went wrong.
+      past_individual_errors — list of individual (non-accumulated) error
+                               strings used to detect repetition.
+
+    The loop gives up (re-raises PlanValidationError) when
+    should_fail_for_repeated_invalid_pattern() signals that the model has
+    produced the same bad command on at least two separate attempts.
+    """
+    accumulated_feedback: str = ""
+    past_individual_errors: list[str] = []
+
+    while True:
+        try:
+            plan = run_planner(
+                task,
+                revision_feedback=accumulated_feedback or None,
+            )
+            return plan  # valid — exit the loop
+
+        except PlanValidationError as exc:
+            # Build the individual error string (no prior context) for
+            # loop-detection comparison.
+            individual_error = build_revision_feedback("", exc)
+
+            if should_fail_for_repeated_invalid_pattern(past_individual_errors, individual_error):
+                runner_log.error(
+                    "[%s] Planner stuck: repeated invalid pattern — %s",
+                    task_id, individual_error,
+                )
+                log_execution_event(task_id, "PLAN LOOP DETECTED", individual_error[:200])
+                raise  # escalate to process_task's outer handler
+
+            # New (unseen) validation failure — accumulate and retry
+            past_individual_errors.append(individual_error)
+            accumulated_feedback = build_revision_feedback(accumulated_feedback, exc)
+
+            runner_log.warning(
+                "[%s] Plan invalid (%d unique error(s) so far) — retrying with feedback",
+                task_id, len(past_individual_errors),
+            )
+            log_execution_event(
+                task_id,
+                "PLAN INVALID — RETRY",
+                individual_error[:200],
+            )
+
 
 def _build_revision_feedback(review: dict) -> str:
     """
