@@ -82,8 +82,13 @@ STRICT RULES:
 11. ALL commands that scaffold or initialize a project MUST be fully non-interactive.
     This system runs autonomously — there is no user present to answer prompts.
     ALWAYS include flags that suppress interactive prompts, for example:
-      - npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --use-npm --yes
+      - npx --yes create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --use-npm --yes
     NEVER use a bare scaffolding command without --yes or equivalent suppression flags.
+12. ALL npx commands MUST include --yes as the SECOND token (immediately after npx).
+    This tells npx itself to auto-install packages without prompting.
+    CORRECT:   npx --yes create-next-app@latest .
+    INCORRECT: npx create-next-app@latest .
+    The --yes flag must appear before the package name, every time.
 
 Return only valid JSON.
 """
