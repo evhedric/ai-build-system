@@ -1,0 +1,430 @@
+"""
+reviewer_logic.py
+
+Reviewer logic module enforcing strict production-quality standards.
+A task submission is only approved when ALL of the following criteria are met:
+
+  1. Completeness   — all required sections/fields are present and non-empty.
+  2. Clarity        — the description and acceptance criteria are unambiguous.
+  3. Differentiation — the task is meaningfully distinct from existing work.
+  4. Limitations    — known constraints, risks, or out-of-scope items are documented.
+
+If any criterion is not satisfied the reviewer returns 'revise' together with
+targeted, actionable instructions so the author knows exactly what to fix.
+"""
+
+from __future__ import annotations
+
+import re
+import textwrap
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Literal, Optional, Tuple
+
+
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
+
+@dataclass
+class FeedbackItem:
+    """
+    A single, structured piece of revision feedback.
+
+    Attributes
+    ----------
+    category : str
+        The quality dimension this issue belongs to
+        (e.g. 'Completeness', 'Clarity', 'Differentiation', 'Limitations').
+    field_name : str
+        The task field that is affected (e.g. 'description', 'limitations').
+    problem : str
+        A concise statement of what is wrong or missing.
+    instruction : str
+        A concrete, actionable instruction telling the author exactly how
+        to resolve the problem.
+    example : str, optional
+        An illustrative example of acceptable content, if helpful.
+    """
+
+    category: str
+    field_name: str
+    problem: str
+    instruction: str
+    example: str = ""
+
+    def format(self, index: int) -> str:
+        """Render this item as a numbered, human-readable block."""
+        lines = [
+            f"  {index}. [{self.category}] Field: '{self.field_name}'",
+            f"     Problem    : {self.problem}",
+            f"     Fix needed : {self.instruction}",
+        ]
+        if self.example:
+            # Indent the example neatly under the fix description.
+            wrapped = textwrap.fill(
+                self.example,
+                width=72,
+                initial_indent="     Example    : ",
+                subsequent_indent="                  ",
+            )
+            lines.append(wrapped)
+        return "\n".join(lines)
+
+
+@dataclass
+class ReviewResult:
+    """Outcome returned by the reviewer for every task submission."""
+
+    decision: Literal["approve", "revise"]
+    feedback: List[FeedbackItem] = field(default_factory=list)
+
+    def is_approved(self) -> bool:
+        return self.decision == "approve"
+
+    # ------------------------------------------------------------------
+    # Summary helpers
+    # ------------------------------------------------------------------
+
+    def feedback_by_category(self) -> Dict[str, List[FeedbackItem]]:
+        """Return feedback items grouped by quality category."""
+        grouped: Dict[str, List[FeedbackItem]] = {}
+        for item in self.feedback:
+            grouped.setdefault(item.category, []).append(item)
+        return grouped
+
+    def categories_failed(self) -> List[str]:
+        """Return a sorted list of the categories that have at least one issue."""
+        return sorted(self.feedback_by_category().keys())
+
+    # ------------------------------------------------------------------
+    # String representation
+    # ------------------------------------------------------------------
+
+    def __str__(self) -> str:
+        if self.is_approved():
+            return (
+                "APPROVED: Task meets all production-quality standards.\n"
+                "No further changes are required."
+            )
+
+        header_lines = [
+            "=" * 72,
+            "DECISION : REVISE",
+            "=" * 72,
+            "",
+            "This task submission does NOT yet meet production-quality standards.",
+            "Every issue listed below must be resolved before resubmission.",
+            "",
+            f"Categories with issues: {', '.join(self.categories_failed())}",
+            f"Total issues found    : {len(self.feedback)}",
+            "",
+            "-" * 72,
+            "DETAILED REVISION INSTRUCTIONS",
+            "-" * 72,
+            "",
+        ]
+
+        body_lines = []
+        grouped = self.feedback_by_category()
+        item_index = 1
+        for category in sorted(grouped.keys()):
+            body_lines.append(f"  ### {category} ###")
+            for fb_item in grouped[category]:
+                body_lines.append(fb_item.format(item_index))
+                body_lines.append("")
+                item_index += 1
+
+        footer_lines = [
+            "-" * 72,
+            "Please address ALL of the above points and resubmit.",
+            "The task will be re-evaluated in full on the next submission.",
+            "=" * 72,
+        ]
+
+        return "\n".join(header_lines + body_lines + footer_lines)
+
+    # ------------------------------------------------------------------
+    # Machine-readable summary (useful for programmatic consumers)
+    # ------------------------------------------------------------------
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a plain-dict representation of this result."""
+        return {
+            "decision": self.decision,
+            "categories_failed": self.categories_failed(),
+            "total_issues": len(self.feedback),
+            "feedback": [
+                {
+                    "category": fb.category,
+                    "field_name": fb.field_name,
+                    "problem": fb.problem,
+                    "instruction": fb.instruction,
+                    "example": fb.example,
+                }
+                for fb in self.feedback
+            ],
+        }
+
+
+# ---------------------------------------------------------------------------
+# Individual quality-check helpers
+# ---------------------------------------------------------------------------
+
+# Minimum word counts used to detect suspiciously thin content.
+_MIN_DESCRIPTION_WORDS = 20
+_MIN_CRITERIA_WORDS = 10
+_MIN_LIMITATIONS_WORDS = 8
+
+# Vague filler phrases that signal a lack of clarity.
+_VAGUE_PHRASES: List[str] = [
+    r"\bTBD\b",
+    r"\bTODO\b",
+    r"\bN/A\b",
+    r"\bsomehow\b",
+    r"\bmaybe\b",
+    r"\bpossibly\b",
+    r"\bvarious\b",
+    r"\betc\.?\b",
+    r"\bsomething\b",
+    r"\bstuff\b",
+]
+_VAGUE_PATTERN = re.compile("|".join(_VAGUE_PHRASES), re.IGNORECASE)
+
+
+def _word_count(text: str) -> int:
+    return len(text.split()) if text else 0
+
+
+def _check_completeness(task: Dict[str, Any]) -> List[FeedbackItem]:
+    """
+    Verify that all required fields are present and contain substantive content.
+
+    Required top-level keys
+    -----------------------
+    title, description, acceptance_criteria, limitations
+
+    Each must be a non-empty string (or non-empty list for list-type fields).
+    """
+    issues: List[FeedbackItem] = []
+
+    required_fields: Dict[str, Dict[str, str]] = {
+        "title": {
+            "guidance": "A concise, descriptive title (≤ 120 characters).",
+            "example": "Add rate-limiting middleware to the public REST API",
+        },
+        "description": {
+            "guidance": (
+                f"A thorough description of the task "
+                f"(minimum {_MIN_DESCRIPTION_WORDS} words). "
+                "Cover the problem being solved, the expected behaviour, "
+                "and any relevant background context."
+            ),
+            "example": (
+                "Currently the public REST API has no rate-limiting, which "
+                "allows a single client to saturate server resources. This "
+                "task adds a token-bucket rate-limiter as Express middleware "
+                "so that each API key is capped at 100 requests per minute."
+            ),
+        },
+        "acceptance_criteria": {
+            "guidance": (
+                f"Clear, testable acceptance criteria "
+                f"(minimum {_MIN_CRITERIA_WORDS} words or items). "
+                "Each criterion must be individually verifiable by QA."
+            ),
+            "example": (
+                "- A client that exceeds 100 req/min receives HTTP 429.\n"
+                "- The Retry-After header is present in every 429 response.\n"
+                "- Requests within the limit succeed with HTTP 200."
+            ),
+        },
+        "limitations": {
+            "guidance": (
+                f"Explicit limitations / out-of-scope notes "
+                f"(minimum {_MIN_LIMITATIONS_WORDS} words). "
+                "List at least two distinct items."
+            ),
+            "example": (
+                "- WebSocket connections are out of scope for this task.\n"
+                "- Rate-limit state is in-process only; distributed "
+                "  enforcement across multiple nodes is not addressed here."
+            ),
+        },
+    }
+
+    for field_name, meta in required_fields.items():
+        value = task.get(field_name)
+
+        # ── Missing entirely ──────────────────────────────────────────────
+        if value is None:
+            issues.append(FeedbackItem(
+                category="Completeness",
+                field_name=field_name,
+                problem=f"The required field '{field_name}' is absent from the submission.",
+                instruction=f"Add the '{field_name}' field. {meta['guidance']}",
+                example=meta.get("example", ""),
+            ))
+            continue
+
+        # ── Normalise lists to a single string for length checks ──────────
+        if isinstance(value, list):
+            combined = " ".join(str(v) for v in value)
+        else:
+            combined = str(value).strip()
+
+        if not combined:
+            issues.append(FeedbackItem(
+                category="Completeness",
+                field_name=field_name,
+                problem=f"The field '{field_name}' is present but contains no content.",
+                instruction=f"Populate '{field_name}' with substantive content. {meta['guidance']}",
+                example=meta.get("example", ""),
+            ))
+            continue
+
+        # ── Per-field minimum-length checks ───────────────────────────────
+        wc = _word_count(combined)
+        if field_name == "description" and wc < _MIN_DESCRIPTION_WORDS:
+            issues.append(FeedbackItem(
+                category="Completeness",
+                field_name="description",
+                problem=(
+                    f"The description is too brief: {wc} word(s) found, "
+                    f"but at least {_MIN_DESCRIPTION_WORDS} are required."
+                ),
+                instruction=(
+                    "Expand the description to explain: (1) the problem being solved, "
+                    "(2) the expected behaviour after this task is complete, and "
+                    "(3) any relevant background context or constraints the implementer needs."
+                ),
+                example=meta.get("example", ""),
+            ))
+        elif field_name == "acceptance_criteria" and wc < _MIN_CRITERIA_WORDS:
+            issues.append(FeedbackItem(
+                category="Completeness",
+                field_name="acceptance_criteria",
+                problem=(
+                    f"The acceptance criteria are too brief: {wc} word(s) found, "
+                    f"but at least {_MIN_CRITERIA_WORDS} are required."
+                ),
+                instruction=(
+                    f"Provide at least {_MIN_CRITERIA_WORDS} words of testable criteria. "
+                    "Each criterion should describe an observable, verifiable outcome "
+                    "that QA or a reviewer can objectively confirm."
+                ),
+                example=meta.get("example", ""),
+            ))
+        elif field_name == "limitations" and wc < _MIN_LIMITATIONS_WORDS:
+            issues.append(FeedbackItem(
+                category="Completeness",
+                field_name="limitations",
+                problem=(
+                    f"The limitations section is too brief: {wc} word(s) found, "
+                    f"but at least {_MIN_LIMITATIONS_WORDS} are required."
+                ),
+                instruction=(
+                    "Describe known constraints, risks, or out-of-scope items in enough "
+                    "detail that an implementer knows exactly what is NOT expected of them."
+                ),
+                example=meta.get("example", ""),
+            ))
+
+    return issues
+
+
+def _check_clarity(task: Dict[str, Any]) -> List[FeedbackItem]:
+    """
+    Ensure the task description and acceptance criteria are unambiguous.
+
+    Flags
+    -----
+    * Vague placeholder phrases (TBD, TODO, etc.)
+    * Acceptance criteria expressed as a single monolithic paragraph with no
+      discrete, verifiable items.
+    * A title that is longer than 120 characters (likely a description, not a title).
+    """
+    issues: List[FeedbackItem] = []
+
+    # ── Title length sanity check ─────────────────────────────────────────
+    title = str(task.get("title", "")).strip()
+    if title and len(title) > 120:
+        issues.append(FeedbackItem(
+            category="Clarity",
+            field_name="title",
+            problem=(
+                f"The title is {len(title)} characters long, which exceeds the "
+                "120-character limit. Overly long titles are hard to scan and "
+                "usually contain detail that belongs elsewhere."
+            ),
+            instruction=(
+                "Shorten the title to at most 120 characters. Move any additional "
+                "context or detail into the 'description' field instead."
+            ),
+            example="Add rate-limiting middleware to the public REST API",
+        ))
+
+    # ── Vague-phrase scan across description and acceptance criteria ───────
+    fields_to_scan = {
+        "description": task.get("description", ""),
+        "acceptance_criteria": task.get("acceptance_criteria", ""),
+    }
+    for field_name, value in fields_to_scan.items():
+        if isinstance(value, list):
+            text = " ".join(str(v) for v in value)
+        else:
+            text = str(value)
+
+        matches = _VAGUE_PATTERN.findall(text)
+        if matches:
+            unique = sorted({m.upper() for m in matches})
+            issues.append(FeedbackItem(
+                category="Clarity",
+                field_name=field_name,
+                problem=(
+                    f"'{field_name}' contains vague or placeholder language: "
+                    f"{', '.join(unique)}. These terms leave critical details undefined."
+                ),
+                instruction=(
+                    "Replace every flagged term with precise, unambiguous wording. "
+                    "Ask yourself: 'Could two different engineers interpret this the same way?' "
+                    "If the answer is no, rewrite until the meaning is unequivocal."
+                ),
+                example=(
+                    "Instead of 'handle various edge cases somehow', write "
+                    "'Return HTTP 422 with a structured error body when the request "
+                    "payload is missing a required field'."
+                ),
+            ))
+
+    # ── Acceptance criteria structure check ───────────────────────────────
+    criteria = task.get("acceptance_criteria")
+    if criteria is not None:
+        if isinstance(criteria, str):
+            has_structure = bool(
+                re.search(r"(\n|\r|- |\d+\.|\u2022)", criteria)
+            )
+            if not has_structure:
+                issues.append(FeedbackItem(
+                    category="Clarity",
+                    field_name="acceptance_criteria",
+                    problem=(
+                        "The acceptance criteria appear to be a single paragraph "
+                        "with no discrete items. Without individual, enumerable "
+                        "criteria it is impossible to verify each condition independently."
+                    ),
+                    instruction=(
+                        "Rewrite the acceptance criteria as a bulleted or numbered list "
+                        "where each item represents one independently testable condition. "
+                        "A criterion is well-formed when a tester can mark it PASS or FAIL "
+                        "without reference to any other criterion."
+                    ),
+                    example=(
+                        "- Authenticated users receive HTTP 200 with the correct payload.\n"
+                        "- Unauthenticated requests receive HTTP 401.\n"
+                        "- Requests with a malformed token receive HTTP 403."
+                    ),
+                ))
+        elif isinstance(criteria, list) and len(criteria) < 2:
+            issues.append(FeedbackItem(
+                category="Clarity",
+                field_name="acceptance_criteria",
