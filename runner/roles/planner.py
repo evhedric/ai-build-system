@@ -79,6 +79,11 @@ STRICT RULES:
 8. Steps must be concrete, repo-relative, and directly actionable in a local Python environment.
 9. If revision feedback is provided, you MUST change the failing step instead of repeating it.
 10. Do not repeat a previously failed invalid command pattern.
+11. ALL commands that scaffold or initialize a project MUST be fully non-interactive.
+    This system runs autonomously — there is no user present to answer prompts.
+    ALWAYS include flags that suppress interactive prompts, for example:
+      - npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --use-npm --yes
+    NEVER use a bare scaffolding command without --yes or equivalent suppression flags.
 
 Return only valid JSON.
 """
