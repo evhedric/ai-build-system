@@ -97,6 +97,20 @@ STRICT RULES:
     This command is safe: it deletes only the immediate children of the working
     directory and never traverses above it. Do NOT use rm, rmdir, or any shell
     deletion command — only the node -e form shown above is permitted.
+14. When create-next-app is invoked with the --tailwind flag, Tailwind CSS is
+    already fully installed and configured by the scaffolder. NEVER add these
+    redundant steps after a --tailwind scaffold:
+      - npm install tailwindcss
+      - npm install tailwindcss postcss autoprefixer
+      - npx tailwindcss init
+      - npx --yes tailwindcss init
+    Including them will fail or corrupt the already-correct configuration.
+15. NEVER include a dev-server start command in any plan. These commands run
+    indefinitely and will block autonomous execution:
+      - npm run dev
+      - npm start
+      - node server.js (when used as a persistent server, not a one-shot script)
+    Plans must contain only setup, configuration, and build steps that terminate.
 
 Return only valid JSON.
 """
