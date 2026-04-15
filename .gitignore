@@ -43,3 +43,11 @@ desktop.ini
 # Distribution / packaging
 *.tar.gz
 *.zip
+
+# Pipeline runtime directories — generated content, not source
+tasks/
+plans/
+artifacts/
+reviews/
+logs/
+state/
