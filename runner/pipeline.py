@@ -26,6 +26,7 @@ from runner.roles.planner import run_planner
 from runner.roles.executor import run_executor
 from runner.roles.reviewer import run_reviewer
 from runner.github_ops import handle_post_approval
+from runner.plan_validator import validate_plan, PlanValidationError
 
 
 def process_task(task: dict) -> dict:
@@ -49,6 +50,18 @@ def process_task(task: dict) -> dict:
         # Stage 2: Planner creates the execution plan
         # ---------------------------------------------------------------
         plan = run_planner(task)
+
+        # Validate all run_command steps before execution begins.
+        # Raises PlanValidationError (caught below) if any command is
+        # malformed, uses a disallowed pattern, or has a forbidden prefix.
+        try:
+            validate_plan(plan)
+            runner_log.info("[%s] Plan validation passed (%d steps)", task_id, len(plan.get("steps", [])))
+            log_execution_event(task_id, "PLAN VALID", f"steps={len(plan.get('steps', []))}")
+        except PlanValidationError as exc:
+            runner_log.error("[%s] Plan validation FAILED: %s", task_id, exc)
+            log_execution_event(task_id, "PLAN INVALID", str(exc))
+            raise  # bubbles to outer except → task marked failed with clear reason
 
         # Store the branch name on the task for reference
         task["branch_name"] = plan["branch_name"]
