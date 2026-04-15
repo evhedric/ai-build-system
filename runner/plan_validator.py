@@ -93,9 +93,12 @@ def validate_plan(plan: dict) -> None:
 
     steps = plan.get("steps", [])
     for index, step in enumerate(steps, start=1):
-        if step.get("action_type") != "run_command":
+        # Accept both "action_type" (system schema) and "type" (planner schema)
+        step_type = step.get("action_type") or step.get("type", "")
+        if step_type != "run_command":
             continue
-        command = step.get("target", step.get("command", ""))
+        # Accept both "command" (planner schema) and "target" (system schema)
+        command = step.get("command") or step.get("target", "")
         result = validate_run_command(command)
         if not result.valid:
             reasons.extend(
