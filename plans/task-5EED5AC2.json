@@ -1,0 +1,51 @@
+{
+  "task_id": "task-5EED5AC2",
+  "created_at": "2026-04-15T13:15:08Z",
+  "branch_name": "task/task-5EED5AC2/refactor-reviewer-for-rule-based-approval-system",
+  "estimated_complexity": "medium",
+  "notes": "Ensure that the refactoring strictly adheres to rule-based criteria and avoids any subjective judgment.",
+  "steps": [
+    {
+      "step_id": 1,
+      "description": "Identify current reviewer logic",
+      "action_type": "research",
+      "target": "Current reviewer logic implementation",
+      "details": "Examine the existing codebase to understand how the current reviewer logic is implemented and identify areas where opinion-based decisions are made."
+    },
+    {
+      "step_id": 2,
+      "description": "Define rule-based criteria for approval",
+      "action_type": "create_file",
+      "target": "reviewer/rules.json",
+      "details": "Create a JSON file that outlines the explicit pass/fail criteria: (1) all plan steps must be completed, (2) no execution issues allowed, (3) required sections must exist for documentation tasks, (4) improvements must be measurable vs previous version."
+    },
+    {
+      "step_id": 3,
+      "description": "Implement rule-based logic in reviewer",
+      "action_type": "modify_file",
+      "target": "reviewer/reviewer.py",
+      "details": "Refactor the reviewer code to replace opinion-based logic with rule-based logic. Use the criteria defined in 'reviewer/rules.json' to determine approval or 'revise' status. Ensure that the logic checks for completion of all plan steps, absence of execution issues, presence of required documentation sections, and measurable improvements."
+    },
+    {
+      "step_id": 4,
+      "description": "Add functionality to return specific actionable fixes",
+      "action_type": "modify_file",
+      "target": "reviewer/reviewer.py",
+      "details": "Enhance the reviewer logic to provide specific actionable fixes when returning 'revise'. This should include detailed feedback on which criteria failed and how to address them."
+    },
+    {
+      "step_id": 5,
+      "description": "Test the refactored reviewer logic",
+      "action_type": "run_command",
+      "target": "pytest tests/test_reviewer.py",
+      "details": "Run the test suite to ensure that the refactored reviewer logic works as expected. Verify that the rule-based system correctly approves or returns 'revise' based on the defined criteria."
+    },
+    {
+      "step_id": 6,
+      "description": "Document the new rule-based approval system",
+      "action_type": "document",
+      "target": "docs/reviewer_approval_system.md",
+      "details": "Create a documentation file explaining the new rule-based approval system. Include sections on the criteria used, how the system determines approval or 'revise', and examples of actionable fixes. The tone should be technical and detailed."
+    }
+  ]
+}

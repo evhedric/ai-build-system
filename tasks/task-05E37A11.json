@@ -1,0 +1,38 @@
+{
+  "task_id": "task-05E37A11",
+  "created_at": "2026-04-15T19:07:42Z",
+  "updated_at": "2026-04-15T19:10:15Z",
+  "status": "failed",
+  "request": "Create a Python function that calculates the factorial of a number. Write a pytest test file to validate it, including edge cases (0, 1, negative input). Run the tests. If any test fails, fix the implementation until all tests pass. Ensure the final solution is correct and documented.",
+  "title": "Develop and test a Python factorial function",
+  "goals": [
+    "Implement a Python function to calculate the factorial of a number",
+    "Create a pytest test file to validate the factorial function",
+    "Include edge cases such as 0, 1, and negative inputs in the tests",
+    "Ensure all tests pass and fix the implementation if necessary",
+    "Document the final solution with appropriate comments"
+  ],
+  "constraints": [
+    "Use Python programming language",
+    "Testing must be done using pytest",
+    "Do not use external libraries for factorial calculation"
+  ],
+  "success_criteria": [
+    "Factorial function correctly calculates factorial for positive integers",
+    "Tests cover edge cases including 0, 1, and negative inputs",
+    "All tests pass without errors",
+    "Code is documented with comments explaining the logic"
+  ],
+  "tags": [
+    "python",
+    "testing",
+    "function",
+    "documentation"
+  ],
+  "priority": "high",
+  "revision_count": 4,
+  "max_revisions": 3,
+  "branch_name": "task/task-05E37A11/develop-and-test-a-python-factorial-function",
+  "pr_url": "",
+  "failure_reason": "Exceeded max revisions (3)"
+}

@@ -1,0 +1,37 @@
+{
+  "task_id": "task-5EED5AC2",
+  "created_at": "2026-04-15T13:14:45Z",
+  "updated_at": "2026-04-15T13:28:29Z",
+  "status": "failed",
+  "request": "Refactor the reviewer so that approval is rule-based, not opinion-based. Define explicit pass/fail criteria including: (1) all plan steps must be completed, (2) no execution issues allowed, (3) required sections must exist for documentation tasks, (4) improvements must be measurable vs previous version. If any rule fails, reviewer MUST return 'revise' with specific actionable fixes. Approval should only happen if ALL rules pass.",
+  "title": "Refactor reviewer for rule-based approval system",
+  "goals": [
+    "Implement a rule-based approval system for the reviewer",
+    "Define explicit pass/fail criteria for plan completion, execution issues, documentation sections, and measurable improvements",
+    "Ensure the reviewer returns 'revise' with specific actionable fixes if any rule fails",
+    "Ensure approval occurs only if all rules pass"
+  ],
+  "constraints": [
+    "Do not allow opinion-based approval",
+    "Approval must strictly follow the defined rules"
+  ],
+  "success_criteria": [
+    "The reviewer uses a rule-based system to approve or return 'revise'",
+    "All plan steps are verified as completed before approval",
+    "No execution issues are present in the final output",
+    "Required sections exist in documentation tasks",
+    "Improvements are measurable against the previous version"
+  ],
+  "tags": [
+    "refactor",
+    "reviewer",
+    "automation",
+    "quality assurance"
+  ],
+  "priority": "high",
+  "revision_count": 4,
+  "max_revisions": 3,
+  "branch_name": "task/task-5EED5AC2/refactor-reviewer-for-rule-based-approval-system",
+  "pr_url": "",
+  "failure_reason": "Exceeded max revisions (3)"
+}

@@ -1,0 +1,44 @@
+{
+  "task_id": "task-49D6EBCC",
+  "created_at": "2026-04-15T14:49:17Z",
+  "branch_name": "task/task-49D6EBCC/update-planner-for-python-command-compatibility",
+  "estimated_complexity": "medium",
+  "notes": "Ensure that only Python-related commands are modified. Non-Python commands should remain unchanged.",
+  "steps": [
+    {
+      "step_id": 1,
+      "description": "Identify all instances of 'pytest' command usage in the planner code",
+      "action_type": "research",
+      "target": "planner codebase",
+      "details": "Search through the planner's codebase to find all occurrences where 'pytest' is used as a command. This includes any test execution steps in the generated plans."
+    },
+    {
+      "step_id": 2,
+      "description": "Modify 'pytest' commands to use 'python -m pytest'",
+      "action_type": "modify_file",
+      "target": "planner codebase",
+      "details": "Replace all instances of 'pytest' with 'python -m pytest' in the planner's codebase. Ensure that the changes are made only to the test execution steps and do not affect any non-Python related commands."
+    },
+    {
+      "step_id": 3,
+      "description": "Identify all instances of 'pip install' command usage in the planner code",
+      "action_type": "research",
+      "target": "planner codebase",
+      "details": "Search through the planner's codebase to find all occurrences where 'pip install' is used as a command. This includes any dependency installation steps in the generated plans."
+    },
+    {
+      "step_id": 4,
+      "description": "Modify 'pip install' commands to use 'python -m pip install'",
+      "action_type": "modify_file",
+      "target": "planner codebase",
+      "details": "Replace all instances of 'pip install <package>' with 'python -m pip install <package>' in the planner's codebase. Ensure that the changes are made only to the dependency installation steps and do not affect any non-Python related commands."
+    },
+    {
+      "step_id": 5,
+      "description": "Verify changes in the planner's generated plans",
+      "action_type": "run_command",
+      "target": "test suite for planner",
+      "details": "Run the planner's test suite to ensure that the changes to the command syntax do not break any existing functionality. Check that all generated plans now use 'python -m pytest' and 'python -m pip install' where applicable."
+    }
+  ]
+}

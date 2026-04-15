@@ -1,0 +1,32 @@
+{
+  "task_id": "task-6C5C989C",
+  "created_at": "2026-04-15T12:40:28Z",
+  "updated_at": "2026-04-15T12:43:38Z",
+  "status": "complete",
+  "request": "Update the reviewer so that it does NOT approve tasks easily. It must enforce strict production-quality standards. Require explicit checks for completeness, clarity, differentiation, and limitations. If anything is missing or weak, it must return 'revise' with specific instructions instead of approving.",
+  "title": "Enhance reviewer to enforce strict quality standards",
+  "goals": [
+    "Modify the reviewer's approval criteria to enforce strict production-quality standards",
+    "Implement explicit checks for task completeness, clarity, differentiation, and limitations",
+    "Ensure the reviewer returns 'revise' with specific instructions if standards are not met"
+  ],
+  "constraints": [
+    "Do not allow the reviewer to approve tasks that do not meet all specified criteria",
+    "Ensure the reviewer provides detailed feedback for revisions"
+  ],
+  "success_criteria": [
+    "Reviewer only approves tasks that meet all defined quality standards",
+    "Reviewer provides specific revision instructions if a task is incomplete or unclear",
+    "Reviewer checks for clear differentiation and limitations in tasks"
+  ],
+  "tags": [
+    "review",
+    "quality",
+    "automation"
+  ],
+  "priority": "high",
+  "revision_count": 0,
+  "max_revisions": 3,
+  "branch_name": "task/task-6C5C989C/enhance-reviewer-to-enforce-strict-quality-standar",
+  "pr_url": ""
+}

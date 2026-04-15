@@ -1,0 +1,37 @@
+{
+  "task_id": "task-9B4EDFFC",
+  "created_at": "2026-04-15T14:13:21Z",
+  "branch_name": "task/task-9B4EDFFC/fix-executor-environment-and-revision-handling",
+  "estimated_complexity": "medium",
+  "notes": "Ensure that any changes to the executor environment and revision handling logic do not affect other parts of the system.",
+  "steps": [
+    {
+      "step_id": 1,
+      "description": "Modify test command execution to use 'python -m pytest'",
+      "action_type": "modify_file",
+      "target": "executor.py",
+      "details": "Locate the section of the code where tests are executed. Change the command from 'pytest' to 'python -m pytest' to ensure it runs within the project's Python environment."
+    },
+    {
+      "step_id": 2,
+      "description": "Add logic to check for pytest installation",
+      "action_type": "modify_file",
+      "target": "executor.py",
+      "details": "Before running tests, add a check to see if 'pytest' is installed in the current Python environment. Use a try-except block to attempt importing pytest, and if it fails, run 'pip install pytest' to install it."
+    },
+    {
+      "step_id": 3,
+      "description": "Fix revision counter to respect MAX_REVISIONS limit",
+      "action_type": "modify_file",
+      "target": "revision_handler.py",
+      "details": "Locate the logic handling task revisions. Ensure that the counter stops at MAX_REVISIONS and does not allow a task to attempt a revision beyond this limit. Adjust any conditional logic to enforce this constraint."
+    },
+    {
+      "step_id": 4,
+      "description": "Test the changes to ensure correct behavior",
+      "action_type": "run_command",
+      "target": "python -m pytest tests/",
+      "details": "Run the test suite using the modified command to verify that tests execute correctly within the project environment and that pytest is installed if missing. Also, test scenarios where the revision limit is reached to ensure tasks fail appropriately."
+    }
+  ]
+}

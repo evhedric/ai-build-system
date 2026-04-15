@@ -1,0 +1,35 @@
+{
+  "task_id": "task-34BE0BA7",
+  "created_at": "2026-04-15T19:11:20Z",
+  "updated_at": "2026-04-15T19:12:53Z",
+  "status": "failed",
+  "request": "Find the actual planner prompt file used at runtime and update it to enforce: ALL test commands MUST use 'python -m pytest'. Completely forbid 'pytest' alone. Ensure this applies to all future task planning, not just test-specific planner updates. Verify by generating a new plan and confirming correct commands.",
+  "title": "Update planner prompt to enforce 'python -m pytest' for tests",
+  "goals": [
+    "Locate the current planner prompt file used at runtime",
+    "Modify the planner prompt to enforce the use of 'python -m pytest' for all test commands",
+    "Ensure the planner prompt forbids the use of 'pytest' alone",
+    "Verify the updated planner prompt by generating a new plan and confirming the correct test commands are used"
+  ],
+  "constraints": [
+    "Do not alter any other unrelated parts of the planner prompt",
+    "Ensure changes apply to all future task planning, not limited to test-specific updates"
+  ],
+  "success_criteria": [
+    "The planner prompt file is successfully located and identified",
+    "The planner prompt is updated to enforce 'python -m pytest' and forbid 'pytest' alone",
+    "A new plan is generated using the updated prompt, and all test commands use 'python -m pytest'"
+  ],
+  "tags": [
+    "configuration",
+    "testing",
+    "automation",
+    "planning"
+  ],
+  "priority": "high",
+  "revision_count": 4,
+  "max_revisions": 3,
+  "branch_name": "task/task-34BE0BA7/update-planner-prompt-to-enforce-python-m-pytest-f",
+  "pr_url": "",
+  "failure_reason": "Exceeded max revisions (3)"
+}

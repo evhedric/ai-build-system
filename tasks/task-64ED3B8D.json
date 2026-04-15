@@ -1,0 +1,33 @@
+{
+  "task_id": "task-64ED3B8D",
+  "created_at": "2026-04-15T14:24:42Z",
+  "updated_at": "2026-04-15T14:26:56Z",
+  "status": "complete",
+  "request": "Add environment self-healing to the executor. If a command fails due to missing dependencies (e.g., pytest), automatically install them using 'python -m pip install <package>' and retry the command once. If installation fails, return a clear error. Do not loop indefinitely. Ensure this logic applies to all run_command steps.",
+  "title": "Implement environment self-healing in executor",
+  "goals": [
+    "Detect missing dependencies when a command fails in the executor",
+    "Automatically install missing dependencies using 'python -m pip install <package>'",
+    "Retry the failed command once after installing dependencies",
+    "Return a clear error message if dependency installation fails"
+  ],
+  "constraints": [
+    "Do not loop indefinitely on command retries",
+    "Ensure the self-healing logic applies to all run_command steps"
+  ],
+  "success_criteria": [
+    "The executor retries a command once after installing missing dependencies",
+    "A clear error message is returned if dependency installation fails",
+    "No infinite loops occur during command retries"
+  ],
+  "tags": [
+    "feature",
+    "error-handling",
+    "automation"
+  ],
+  "priority": "high",
+  "revision_count": 0,
+  "max_revisions": 3,
+  "branch_name": "task/task-64ED3B8D/implement-environment-self-healing-in-executor",
+  "pr_url": ""
+}

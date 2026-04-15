@@ -1,0 +1,44 @@
+{
+  "task_id": "task-95BFE620",
+  "created_at": "2026-04-15T18:25:42Z",
+  "branch_name": "task/task-95BFE620/enhance-planner-to-enforce-executable-shell-comman",
+  "estimated_complexity": "medium",
+  "notes": "Ensure that the validation logic is robust enough to handle various shell command formats and edge cases.",
+  "steps": [
+    {
+      "step_id": 1,
+      "description": "Identify the planner component responsible for generating run_command steps",
+      "action_type": "research",
+      "target": "planner component structure",
+      "details": "Examine the codebase to locate the specific module or function where run_command steps are generated. This will likely involve understanding the current logic that constructs these steps."
+    },
+    {
+      "step_id": 2,
+      "description": "Modify the planner to enforce executable shell commands",
+      "action_type": "modify_file",
+      "target": "path/to/planner_module.py",
+      "details": "Update the logic in the identified module to ensure that all run_command steps generate real, executable shell commands. Remove any logic that allows placeholders like 'test suite for planner'. Ensure that the commands are formatted to be directly runnable in a local environment."
+    },
+    {
+      "step_id": 3,
+      "description": "Implement validation logic for run_command steps",
+      "action_type": "modify_file",
+      "target": "path/to/planner_module.py",
+      "details": "Add a validation function that checks each run_command step to ensure it is a real, executable shell command. This function should reject any command that contains placeholders or cannot be executed in a local environment. Integrate this validation into the planner's workflow."
+    },
+    {
+      "step_id": 4,
+      "description": "Test the updated planner for compliance with new rules",
+      "action_type": "run_command",
+      "target": "python -m pytest tests/test_planner.py",
+      "details": "Run the test suite for the planner to ensure that all changes comply with the new rules. Specifically, verify that all run_command steps are executable and that the validation logic correctly identifies and rejects non-executable commands."
+    },
+    {
+      "step_id": 5,
+      "description": "Document changes made to the planner",
+      "action_type": "document",
+      "target": "docs/planner_updates.md",
+      "details": "Create a new documentation file that outlines the changes made to the planner. Include details on the new enforcement of executable shell commands, the removal of placeholders, and the validation logic. Ensure the documentation is clear and technical, suitable for developers working with the planner."
+    }
+  ]
+}

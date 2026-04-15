@@ -1,0 +1,34 @@
+{
+  "task_id": "task-6C5A7B4D",
+  "created_at": "2026-04-15T18:40:38Z",
+  "updated_at": "2026-04-15T18:59:42Z",
+  "status": "failed",
+  "request": "Update the planner so that during revisions it must adapt its plan based on previous execution failures. If a run_command step fails, the planner must modify or replace that step instead of repeating it. It should analyze the failure and generate a new approach (e.g., fix the test, adjust the command, or remove invalid validation). Prevent identical plans across revisions.",
+  "title": "Enhance planner to adapt plans based on execution failures",
+  "goals": [
+    "Implement logic for the planner to analyze execution failures and adapt plans accordingly",
+    "Ensure the planner modifies or replaces failed run_command steps instead of repeating them",
+    "Develop a mechanism to prevent identical plans across revisions"
+  ],
+  "constraints": [
+    "Do not introduce changes that affect the overall architecture of the planner",
+    "Ensure backward compatibility with existing planner functionalities"
+  ],
+  "success_criteria": [
+    "The planner successfully adapts plans by modifying or replacing failed steps in at least 90% of test cases",
+    "Identical plans are not generated across revisions in any test cases",
+    "The planner maintains its original functionality without regression issues"
+  ],
+  "tags": [
+    "planner",
+    "adaptation",
+    "error-handling",
+    "optimization"
+  ],
+  "priority": "high",
+  "revision_count": 4,
+  "max_revisions": 3,
+  "branch_name": "task/task-6C5A7B4D/enhance-planner-to-adapt-plans-based-on-execution-",
+  "pr_url": "",
+  "failure_reason": "Exceeded max revisions (3)"
+}

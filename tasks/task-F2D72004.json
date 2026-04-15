@@ -1,0 +1,33 @@
+{
+  "task_id": "task-F2D72004",
+  "created_at": "2026-04-15T19:04:26Z",
+  "updated_at": "2026-04-15T19:05:30Z",
+  "status": "complete",
+  "request": "Update the planner prompt so that it is STRICTLY rule-based. Add a hard requirement: ALL test commands MUST use 'python -m pytest'. Explicitly forbid the use of 'pytest' alone. If the planner generates a command that violates this rule, it must regenerate the step until it complies. This must be enforced at the prompt level, not just validation.",
+  "title": "Revise planner prompt to enforce rule-based structure",
+  "goals": [
+    "Modify the planner prompt to be strictly rule-based",
+    "Include a hard requirement that all test commands use 'python -m pytest'",
+    "Explicitly forbid the use of 'pytest' alone in test commands",
+    "Ensure the planner regenerates any non-compliant command until it complies"
+  ],
+  "constraints": [
+    "Do not alter the functionality of the planner beyond the specified rule changes",
+    "Ensure the enforcement is at the prompt level, not just through validation"
+  ],
+  "success_criteria": [
+    "The planner prompt includes a rule that mandates the use of 'python -m pytest' for all test commands",
+    "The planner prompt explicitly forbids the use of 'pytest' alone",
+    "The planner is capable of regenerating non-compliant commands until they comply with the rule"
+  ],
+  "tags": [
+    "prompt-engineering",
+    "testing",
+    "rules"
+  ],
+  "priority": "high",
+  "revision_count": 0,
+  "max_revisions": 3,
+  "branch_name": "task/task-F2D72004/revise-planner-prompt-to-enforce-rule-based-struct",
+  "pr_url": ""
+}

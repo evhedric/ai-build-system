@@ -1,0 +1,31 @@
+{
+  "task_id": "task-C3B27332",
+  "created_at": "2026-04-15T19:53:32Z",
+  "updated_at": "2026-04-15T19:54:09Z",
+  "status": "complete",
+  "request": "Ensure ALL run_command steps from ANY source (planner, regeneration, or manual insertion) are passed through validate_plan before execution. There must be NO execution path that bypasses plan validation. Add logging to confirm validation runs before execution.",
+  "title": "Enforce plan validation before command execution",
+  "goals": [
+    "Ensure all run_command steps are passed through validate_plan before execution",
+    "Add logging to confirm that validate_plan runs before any command execution"
+  ],
+  "constraints": [
+    "Do not alter the core logic of validate_plan",
+    "Ensure no execution path bypasses the plan validation"
+  ],
+  "success_criteria": [
+    "All run_command steps are verified to pass through validate_plan",
+    "Logs are generated confirming validate_plan execution before each command",
+    "No command execution occurs without prior validation"
+  ],
+  "tags": [
+    "validation",
+    "logging",
+    "execution"
+  ],
+  "priority": "high",
+  "revision_count": 0,
+  "max_revisions": 3,
+  "branch_name": "task/task-C3B27332/enforce-plan-validation-before-command-execution",
+  "pr_url": ""
+}

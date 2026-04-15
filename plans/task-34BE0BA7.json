@@ -1,0 +1,30 @@
+{
+  "task_id": "task-34BE0BA7",
+  "created_at": "2026-04-15T19:11:34Z",
+  "branch_name": "task/task-34BE0BA7/update-planner-prompt-to-enforce-python-m-pytest-f",
+  "estimated_complexity": "medium",
+  "notes": "Ensure that the changes to the planner prompt are precise and do not affect other functionalities. Verification of the changes is crucial to confirm compliance with the new requirement.",
+  "steps": [
+    {
+      "step_id": 1,
+      "description": "Locate the current planner prompt file used at runtime",
+      "action_type": "research",
+      "target": "location of planner prompt file",
+      "details": "Investigate the project directory structure and configuration files to identify the file that contains the planner prompt used at runtime."
+    },
+    {
+      "step_id": 2,
+      "description": "Modify the planner prompt to enforce 'python -m pytest' for all test commands",
+      "action_type": "modify_file",
+      "target": "path/to/planner_prompt_file",
+      "details": "Edit the planner prompt file to include a rule that explicitly states all test commands must use 'python -m pytest' and that 'pytest' alone is forbidden. Ensure this rule is clear and unambiguous."
+    },
+    {
+      "step_id": 3,
+      "description": "Verify the updated planner prompt by generating a new plan",
+      "action_type": "run_command",
+      "target": "command to generate a new plan",
+      "details": "Execute the command or process that generates a new plan using the updated planner prompt. Ensure that the generated plan includes test commands using 'python -m pytest'."
+    }
+  ]
+}

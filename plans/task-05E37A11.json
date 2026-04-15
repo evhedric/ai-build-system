@@ -1,0 +1,51 @@
+{
+  "task_id": "task-05E37A11",
+  "created_at": "2026-04-15T19:08:00Z",
+  "branch_name": "task/task-05E37A11/develop-and-test-a-python-factorial-function",
+  "estimated_complexity": "medium",
+  "notes": "Ensure that the factorial function handles edge cases correctly and that the test file is comprehensive.",
+  "steps": [
+    {
+      "step_id": 1,
+      "description": "Create factorial.py with a factorial function",
+      "action_type": "create_file",
+      "target": "factorial.py",
+      "details": "Implement a Python function named 'factorial' that takes an integer as input and returns its factorial. The function should handle edge cases such as 0 (return 1) and negative inputs (raise an exception or return None)."
+    },
+    {
+      "step_id": 2,
+      "description": "Create test_factorial.py with pytest tests",
+      "action_type": "create_file",
+      "target": "test_factorial.py",
+      "details": "Write a pytest test suite for the 'factorial' function. Include tests for positive integers, 0, 1, and negative inputs. Ensure that the tests check for correct outputs and handle exceptions or errors appropriately."
+    },
+    {
+      "step_id": 3,
+      "description": "Run pytest to execute the tests",
+      "action_type": "run_command",
+      "target": "pytest test_factorial.py",
+      "details": "Execute the pytest command to run the tests in test_factorial.py. Observe the output to determine if any tests fail."
+    },
+    {
+      "step_id": 4,
+      "description": "Fix any failing tests in factorial.py",
+      "action_type": "modify_file",
+      "target": "factorial.py",
+      "details": "If any tests fail, modify the 'factorial' function in factorial.py to fix the issues. Ensure that all edge cases are handled correctly and that the function passes all tests."
+    },
+    {
+      "step_id": 5,
+      "description": "Re-run pytest to ensure all tests pass",
+      "action_type": "run_command",
+      "target": "pytest test_factorial.py",
+      "details": "Run the pytest command again to verify that all tests now pass successfully. Ensure there are no errors or failures."
+    },
+    {
+      "step_id": 6,
+      "description": "Document the factorial function with comments",
+      "action_type": "modify_file",
+      "target": "factorial.py",
+      "details": "Add comments to the 'factorial' function in factorial.py explaining the logic and handling of edge cases. Ensure the documentation is clear and concise."
+    }
+  ]
+}
