@@ -18,12 +18,19 @@ DISALLOWED_PATTERNS = [
     r"\bthe following\b",
 ]
 
+# Allowlist of permitted command prefixes.
+# Python/pip entries support standard Python and module-based invocations.
+# npm/npx/node entries enable JS/Next.js builds; the system now supports
+# both Python-based and Node-based tasks.
 ALLOWED_COMMAND_PREFIXES = (
     "python ",
     "python -m ",
     "py ",
     "git ",
     "pip ",
+    "npm ",
+    "npx ",
+    "node ",
 )
 
 
