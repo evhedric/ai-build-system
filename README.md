@@ -4,6 +4,16 @@ A local-first AI orchestration system where multiple AI models collaborate auton
 
 ---
 
+## What This Is (and Isn't)
+
+**This is:** An autonomous, file-based AI pipeline that takes a single task description and routes it through four specialized agents (Architect → Planner → Executor → Reviewer) until the work is complete. It is designed for code generation, file creation, and structured content tasks.
+
+**This is not:** A general-purpose AI assistant, a real-time IDE plugin, or a production deployment tool. It does not run tests, validate generated code at runtime, or guarantee correctness — the Reviewer evaluates against structured criteria, not live execution. Human review of generated output before merging is strongly recommended.
+
+**Why use this over a single LLM call?** Each agent has a narrow, specialized role backed by a tailored system prompt. The Architect enforces constraints before any code is written. The Reviewer closes the loop with structured pass/fail logic. This separation reduces hallucination drift and produces more consistent, reviewable output than a single large prompt.
+
+---
+
 ## Overview
 
 Submit a task once. The system routes it through four specialized AI agents, each with a distinct role, until the work is complete and approved.
@@ -221,6 +231,17 @@ python runner.py --dashboard
 
 ---
 
+## Known Limitations
+
+- **No runtime code execution.** The Executor writes files; it does not run or test them. Generated code may contain syntax errors or logical bugs. Always review output before merging.
+- **Context window constraints.** Very large tasks or plans with many steps may hit API token limits. Break large tasks into smaller, focused requests.
+- **Single task at a time.** The runner processes one task through the pipeline sequentially. Parallel task execution is not currently supported.
+- **Revision loops are capped.** If a task fails review three times (configurable via `MAX_REVISIONS`), it moves to `failed` state. You can resubmit with a more specific request.
+- **Git operations require a clean working tree.** The Executor assumes it can create and switch branches. Uncommitted local changes may cause conflicts.
+- **No secret scanning.** The system does not inspect generated file content for hardcoded credentials or sensitive data. Review artifacts before committing to shared repositories.
+
+---
+
 ## Logs
 
 | File | Contents |
@@ -249,6 +270,20 @@ python runner.py --once
 ```
 
 This exercises the full loop: task → architect → plan → executor → reviewer → completion.
+
+---
+
+## Contributing
+
+Contributions are welcome. To add a new agent role, swap an underlying model, or modify pipeline behavior:
+
+1. Fork the repository and create a feature branch.
+2. Role logic lives in `runner/roles/` — each role is a self-contained module.
+3. System prompts live in `prompts/` and can be modified without touching Python code.
+4. Run the test task after any pipeline change to verify end-to-end behavior.
+5. Open a pull request with a clear description of the change and its intent.
+
+Please do not commit real API keys or tokens. Use `.env` for all credentials.
 
 ---
 
