@@ -43,3 +43,6 @@ desktop.ini
 # Distribution / packaging
 *.tar.gz
 *.zip
+
+# Workspace isolation -- build tool output, never commit
+workspaces/

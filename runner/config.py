@@ -39,8 +39,14 @@ LOGS_DIR = BASE_DIR / "logs"
 PROMPTS_DIR = BASE_DIR / "prompts"
 SCHEMAS_DIR = BASE_DIR / "schemas"
 
+# --- Workspace Isolation ---
+# All build task subprocesses execute inside WORKSPACE_DIR, not the repo root.
+# This prevents build tools (npm, npx, node) from polluting the repository.
+WORKSPACES_DIR = BASE_DIR / "workspaces"
+WORKSPACE_DIR  = WORKSPACES_DIR / "perchiq"   # dedicated PerchIQ execution workspace
+
 # Ensure all directories exist at import time
-for _dir in [TASKS_DIR, PLANS_DIR, ARTIFACTS_DIR, REVIEWS_DIR, STATE_DIR, LOGS_DIR, PROMPTS_DIR, SCHEMAS_DIR]:
+for _dir in [TASKS_DIR, PLANS_DIR, ARTIFACTS_DIR, REVIEWS_DIR, STATE_DIR, LOGS_DIR, PROMPTS_DIR, SCHEMAS_DIR, WORKSPACE_DIR]:
     _dir.mkdir(parents=True, exist_ok=True)
 
 

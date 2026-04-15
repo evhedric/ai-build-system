@@ -13,7 +13,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from runner.config import ANTHROPIC_API_KEY, CLAUDE_MODEL, PROMPTS_DIR, BASE_DIR
+from runner.config import ANTHROPIC_API_KEY, CLAUDE_MODEL, PROMPTS_DIR, BASE_DIR, WORKSPACE_DIR
 from runner.logger import executor_log, log_execution_event
 from runner.schemas import make_execution_result, make_step_result, save_execution_result
 from runner.executor_guard import guard_run_command
@@ -181,7 +181,7 @@ def _execute_step(
 
             executor_log.info("[%s] Step %d: Running command: %s", task["task_id"], step_id, cmd)
             result = subprocess.run(
-                cmd, shell=True, cwd=str(BASE_DIR),
+                cmd, shell=True, cwd=str(WORKSPACE_DIR),
                 capture_output=True, text=True, timeout=120,
             )
             output = result.stdout + (f"\nSTDERR: {result.stderr}" if result.stderr else "")
@@ -222,6 +222,10 @@ def run_executor(task: dict, plan: dict) -> dict:
 
     # Create/checkout the task branch
     _ensure_branch(branch_name, task_id)
+
+    # Confirm workspace isolation: all run_command subprocesses execute here
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    executor_log.info("[%s] Execution workspace: %s", task_id, WORKSPACE_DIR)
 
     steps_results = []
     files_created = []
