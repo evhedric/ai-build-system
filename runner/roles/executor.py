@@ -180,13 +180,28 @@ def _execute_step(
                 )
 
             executor_log.info("[%s] Step %d: Running command: %s", task["task_id"], step_id, cmd)
-            result = subprocess.run(
+            # Stream stdout+stderr to the terminal in real time so long-running
+            # commands (npm install, npx, etc.) show progress and never hang
+            # silently.  stderr is merged into stdout (STDOUT) so only one pipe
+            # is read, which prevents the pipe-buffer deadlock that can occur
+            # when capturing stdout and stderr separately.
+            with subprocess.Popen(
                 cmd, shell=True, cwd=str(WORKSPACE_DIR),
-                capture_output=True, text=True, timeout=120,
-            )
-            output = result.stdout + (f"\nSTDERR: {result.stderr}" if result.stderr else "")
-            if result.returncode != 0:
-                return make_step_result(step_id, "failed", output=output, error=f"Exit code {result.returncode}")
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+            ) as proc:
+                output_lines: list[str] = []
+                for line in proc.stdout:
+                    print(line, end="", flush=True)
+                    output_lines.append(line)
+                try:
+                    proc.wait(timeout=120)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    raise
+            output = "".join(output_lines)
+            if proc.returncode != 0:
+                return make_step_result(step_id, "failed", output=output[:500], error=f"Exit code {proc.returncode}")
             return make_step_result(step_id, "completed", output=output[:500])
 
         elif action == "research":
