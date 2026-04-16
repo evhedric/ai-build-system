@@ -131,7 +131,7 @@ def process_task(task: dict) -> dict:
             task = transition_task(task_id, "in_review")
             task = load_task(task_id)
 
-            review = run_reviewer(task, execution_result)
+            review = run_reviewer(task, execution_result, workspace_info)
 
             if review["decision"] == "approved":
                 # -------------------------------------------------------
