@@ -60,6 +60,15 @@ def _has_disallowed_text(command: str) -> List[str]:
     if stripped.startswith("pip install "):
         reasons.append("bare pip install is forbidden; use 'python -m pip install ...'")
 
+    # Block `node <file>.js` — starts a persistent server that never terminates.
+    # Allow `node -e "..."`, `node --version`, `node -p "..."` (flags/inline scripts).
+    if re.match(r"^node\s+[a-zA-Z0-9_./@\\-].*\.js", stripped, re.IGNORECASE):
+        reasons.append(
+            "running 'node <file>.js' is forbidden — it starts a blocking server "
+            "that never terminates in autonomous execution. "
+            "Use 'node -e \"...\"' for one-shot scripts only."
+        )
+
     return reasons
 
 

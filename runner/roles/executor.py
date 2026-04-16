@@ -16,6 +16,7 @@ reads workspace_info and operates inside the directory it was given.
 
 import json
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -192,20 +193,39 @@ def _execute_step(
             # Stream stdout+stderr to the terminal in real time.
             # stderr=STDOUT merges both streams into one pipe, preventing the
             # classic two-pipe deadlock.
+            #
+            # IMPORTANT: The for-line-in-proc.stdout loop blocks indefinitely
+            # if the process is a persistent server (never closes stdout).
+            # We therefore read stdout in a daemon thread while the main thread
+            # calls proc.wait(timeout=120).  When the timeout fires, proc.kill()
+            # closes the subprocess pipe, which causes the reader thread to
+            # receive EOF and exit cleanly.
+            COMMAND_TIMEOUT = 120  # seconds
+
             with subprocess.Popen(
                 cmd, shell=True, cwd=str(workspace_dir),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1,
             ) as proc:
                 output_lines: list[str] = []
-                for line in proc.stdout:
-                    print(line, end="", flush=True)
-                    output_lines.append(line)
+
+                def _read_stdout() -> None:
+                    for line in proc.stdout:
+                        print(line, end="", flush=True)
+                        output_lines.append(line)
+
+                reader = threading.Thread(target=_read_stdout, daemon=True)
+                reader.start()
+
                 try:
-                    proc.wait(timeout=120)
+                    proc.wait(timeout=COMMAND_TIMEOUT)
                 except subprocess.TimeoutExpired:
                     proc.kill()
+                    proc.wait()          # ensure process is fully dead
+                    reader.join(timeout=2)  # drain any remaining output
                     raise
+                else:
+                    reader.join(timeout=5)  # collect trailing output
 
             output = "".join(output_lines)
             if proc.returncode != 0:

@@ -91,12 +91,13 @@ STRICT RULES:
     The --yes flag must appear before the package name, every time.
 13. ANY plan that initializes or scaffolds a project MUST include a workspace cleanup
     as the FIRST step, before any other command.
-    Use EXACTLY this command to safely remove all contents of the current directory
-    without touching the parent:
-      node -e "const fs=require('fs'); fs.readdirSync('.').forEach(f=>fs.rmSync(f,{recursive:true,force:true}))"
-    This command is safe: it deletes only the immediate children of the working
-    directory and never traverses above it. Do NOT use rm, rmdir, or any shell
-    deletion command — only the node -e form shown above is permitted.
+    Use EXACTLY this command to safely remove all project files while preserving git
+    metadata (.git) and dependency caches (node_modules):
+      node -e "const fs=require('fs');const KEEP=new Set(['.git','node_modules']);fs.readdirSync('.').filter(f=>!KEEP.has(f)).forEach(f=>fs.rmSync(f,{recursive:true,force:true}))"
+    This command MUST skip '.git' (the worktree pointer) and 'node_modules'.
+    Deleting '.git' destroys version control tracking for the workspace.
+    Do NOT use rm, rmdir, or any shell deletion command — only the node -e form shown
+    above is permitted. Do NOT use the old one-liner without the KEEP filter.
 14. When create-next-app is invoked with the --tailwind flag, Tailwind CSS is
     already fully installed and configured by the scaffolder. NEVER add these
     redundant steps after a --tailwind scaffold:
@@ -105,12 +106,16 @@ STRICT RULES:
       - npx tailwindcss init
       - npx --yes tailwindcss init
     Including them will fail or corrupt the already-correct configuration.
-15. NEVER include a dev-server start command in any plan. These commands run
-    indefinitely and will block autonomous execution:
+15. NEVER include a command that starts a long-running server or process. These
+    commands run indefinitely and will block autonomous execution forever:
       - npm run dev
       - npm start
-      - node server.js (when used as a persistent server, not a one-shot script)
-    Plans must contain only setup, configuration, and build steps that terminate.
+      - node <any-file>.js   ← ALWAYS FORBIDDEN, even for a "test" or "verify" step
+      - node index.js, node app.js, node server.js, etc.
+    This includes ANY invocation of "node <filename>" as a run step.
+    The executor has no way to stop a blocking server — the step will time out and
+    be marked failed. Plans must contain only file-creation, installation, and
+    build steps that terminate on their own.
 
 Return only valid JSON.
 """
