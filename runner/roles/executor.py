@@ -1,3 +1,19 @@
+# =============================================================================
+# GOLD V3 LOCKED EXECUTOR
+#
+# This executor enforces strict compliance and deterministic execution.
+#
+# DO NOT:
+#   - Reintroduce Python file writing (agent is the ONLY file actor)
+#   - Modify prompt structure without understanding compliance impact
+#   - Switch back to CLI argument mode (must use stdin JSON streaming)
+#   - Relax strict execution rules in the system prompt
+#   - Add hybrid logic that bypasses the agent for "convenience"
+#
+# Breaking these rules will regress the system to non-deterministic behavior.
+# See docs/GOLD_V3_LOCK.md for the full design rationale and known-fix history.
+# =============================================================================
+
 """
 Executor Role — powered by Claude Code SDK (agentic execution).
 
@@ -583,6 +599,50 @@ def execute_task(
         executor_log.info("[%s]   + %s", task_id, f)
     for f in files_modified:
         executor_log.info("[%s]   ~ %s", task_id, f)
+
+    # ── Gold v3 runtime guardrails ────────────────────────────────────────────
+    # These checks are warnings only — they do not abort the execution.
+    # They surface compliance violations so they can be caught during review.
+
+    # 1. Detect unauthorized file creation
+    planned_targets = {
+        step.get("target", "").lstrip("/\\").replace("\\", "/")
+        for step in steps
+        if (step.get("action_type") or step.get("type", "")) in _FILE_ACTIONS
+    }
+    for created in files_created:
+        normalised = created.lstrip("/\\").replace("\\", "/")
+        if normalised not in planned_targets:
+            executor_log.warning(
+                "[%s] UNAUTHORIZED FILE CREATION DETECTED: '%s' was not in the plan",
+                task_id, created,
+            )
+
+    # 2. Detect Bash tool usage in FILE_EXECUTION mode (tool restriction bypass)
+    if mode == _MODE_FILE:
+        for msg in all_messages:
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, ToolUseBlock) and block.name == "Bash":
+                        executor_log.warning(
+                            "[%s] INVALID TOOL USAGE: agent used Bash in FILE_EXECUTION mode",
+                            task_id,
+                        )
+                        break
+
+    # 3. Detect absence of Write tool usage in FILE_EXECUTION mode
+    if mode == _MODE_FILE:
+        write_used = any(
+            isinstance(block, ToolUseBlock) and block.name == "Write"
+            for msg in all_messages
+            if isinstance(msg, AssistantMessage)
+            for block in msg.content
+        )
+        if not write_used and planned_targets:
+            executor_log.warning(
+                "[%s] AGENT DID NOT EXECUTE WRITE STEP — no Write tool calls detected",
+                task_id,
+            )
 
     # ── Stage and commit ──────────────────────────────────────────────────────
     issues: list[str] = []
