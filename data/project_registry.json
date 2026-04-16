@@ -2,17 +2,11 @@
   {
     "project_id": "perchiq",
     "project_name": "PerchIQ",
-    "repo_path": "C:/dev/workspaces/perchiq",
-    "workspace_root": "C:/dev/workspaces/perchiq",
-    "output_root": "C:/dev/workspaces/perchiq/.next",
+    "repo_path": "C:/dev/projects/perchiq/repo",
+    "workspace_root": "C:/dev/projects/perchiq/workspaces",
+    "output_root": "C:/dev/projects/perchiq/outputs",
     "default_branch": "main",
-    "allowed_tools": [
-      "npm",
-      "npx",
-      "node",
-      "git",
-      "python"
-    ],
+    "allowed_tools": ["npm", "npx", "node", "git", "python"],
     "project_type": "nextjs"
   }
 ]
