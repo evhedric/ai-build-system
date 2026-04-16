@@ -201,9 +201,12 @@ def build_executor_prompt(
       FILE steps  → absolute path + ===BEGIN/END FILE CONTENT=== delimiters
       CMD steps   → "Run this command EXACTLY:" + bare command string
 
-    Mode-specific constraints and a hard STOP condition are appended.
-    No language that could trigger scaffolding, project setup, or exploration
-    is present anywhere in this prompt.
+    The prompt MUST open with an imperative verb so the agent acts immediately
+    rather than treating the first line as context and waiting for a command.
+    The "Workspace:" header is intentionally absent — its presence caused the
+    agent to treat the entire block as a configuration preamble and respond
+    with "What would you like me to do?".  Workspace context is communicated
+    via absolute paths embedded directly in each file/command step.
     """
     ws    = str(workspace_dir)
     steps = plan.get("steps", [])
@@ -211,20 +214,27 @@ def build_executor_prompt(
 
     lines: list[str] = []
 
-    # ── Opening: workspace reference only — no "create project" language ──────
-    lines += [
-        f"Workspace: {ws}",
-        "",
-        "Execute the following steps EXACTLY as specified.",
-        "Do NOT perform any action not explicitly listed below.",
-        "",
-    ]
+    # ── Opening: imperative verb first — forces immediate agent action ─────────
+    # Do NOT start with a noun ("Workspace:", "Task:", etc.) — the agent treats
+    # noun-first lines as context declarations and enters listening mode.
+    if mode == _MODE_FILE:
+        lines += [
+            "Write the following files now. Do not create any other files.",
+            "Do not explore the workspace. Do not ask questions. Begin with Step 1.",
+            "",
+        ]
+    else:
+        lines += [
+            "Run the following commands now. Do not create files.",
+            "Do not explore the workspace. Do not ask questions. Begin with Step 1.",
+            "",
+        ]
 
     # ── Steps as strict contracts ─────────────────────────────────────────────
     for step in steps:
-        sid    = step.get("step_id", "?")
-        action = step.get("action_type") or step.get("type", "")
-        target = step.get("target", "")
+        sid     = step.get("step_id", "?")
+        action  = step.get("action_type") or step.get("type", "")
+        target  = step.get("target", "")
         details = step.get("details", "")
 
         if action in _FILE_ACTIONS:
@@ -234,7 +244,7 @@ def build_executor_prompt(
                 "Write file at:",
                 abs_target,
                 "",
-                "Write EXACTLY this content:",
+                "Write EXACTLY this content (copy verbatim between the markers):",
                 "",
                 "===BEGIN FILE CONTENT===",
             ]
@@ -255,33 +265,15 @@ def build_executor_prompt(
             ]
 
         else:
-            # research / unknown — include as informational, no action required
-            desc = step.get("description", "")
-            lines += [
-                f"Step {sid}: [informational — {action}]",
-                desc,
-                "",
-            ]
-
-    # ── Mode-specific constraints ─────────────────────────────────────────────
-    if mode == _MODE_FILE:
-        lines += [
-            "CONSTRAINT: You MUST write ONLY the files listed above.",
-            "CONSTRAINT: Do NOT write any other files.",
-            "CONSTRAINT: Do NOT generate any additional structure.",
-            "",
-        ]
-    else:  # COMMAND_EXECUTION
-        lines += [
-            "CONSTRAINT: You MUST NOT write any files.",
-            "CONSTRAINT: You are ONLY allowed to run the specified commands.",
-            "",
-        ]
+            # research / unknown — skip silently, no agent action required
+            lines += [f"Step {sid}: [skip]", ""]
 
     # ── Hard stop ─────────────────────────────────────────────────────────────
     lines += [
-        "After completing all steps, STOP.",
-        "Do NOT perform any additional actions.",
+        "STOP after completing all steps above.",
+        "Do NOT create additional files.",
+        "Do NOT run additional commands.",
+        "Do NOT explore or read any files not listed above.",
     ]
 
     return "\n".join(lines)
@@ -326,6 +318,7 @@ async def _run_agent(
     workspace_dir: Path,
     task_id: str,
     allowed_tools: list[str],
+    disallowed_tools: list[str] | None = None,
 ) -> tuple[list[Any], ResultMessage | None, bool]:
     """
     Launch the Claude Code agent and collect all messages.
@@ -358,6 +351,7 @@ async def _run_agent(
 
     options = ClaudeCodeOptions(
         allowed_tools=allowed_tools,
+        disallowed_tools=disallowed_tools or [],
         cwd=workspace_dir,
         max_turns=30,
         permission_mode="acceptEdits",
@@ -494,20 +488,28 @@ def execute_task(
     if not ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY is not set in your .env file")
 
-    # ── Select allowed tools by mode ──────────────────────────────────────────
-    # FILE_EXECUTION:    Write + Edit (file ops only).  Read is included because
-    #                    Edit requires a prior Read on existing files.
-    #                    Bash excluded — no shell access to bootstrap structure.
+    # ── Select allowed + disallowed tools by mode ─────────────────────────────
+    # FILE_EXECUTION:    Write + Edit + Read  (file ops only).
+    #   allowed_tools  = whitelist of file-write tools.
+    #   disallowed_tools = explicit denylist for exploration/shell tools.
+    #   Both are needed: --allowedTools alone does not reliably block all
+    #   built-in Claude tools; --disallowedTools adds a hard exclusion layer.
+    #
     # COMMAND_EXECUTION: Bash + Read (run commands, observe output).
-    #                    Write / Edit excluded — no file creation.
+    #   disallowed_tools explicitly blocks file-write tools.
     if mode == _MODE_FILE:
-        allowed_tools = ["Write", "Edit", "Read"]
+        allowed_tools    = ["Write", "Edit", "Read"]
+        disallowed_tools = ["Bash", "Glob", "Grep", "Task", "LS",
+                            "WebSearch", "WebFetch", "TodoWrite", "TodoRead"]
     else:
-        allowed_tools = ["Bash", "Read"]
+        allowed_tools    = ["Bash", "Read"]
+        disallowed_tools = ["Write", "Edit", "MultiEdit",
+                            "Glob", "Grep", "Task",
+                            "WebSearch", "WebFetch", "TodoWrite", "TodoRead"]
 
     executor_log.info(
-        "[%s] Mode=%s | allowed_tools=%s | steps=%d",
-        task_id, mode, allowed_tools, len(steps),
+        "[%s] Mode=%s | allowed=%s | disallowed=%s | steps=%d",
+        task_id, mode, allowed_tools, disallowed_tools, len(steps),
     )
 
     # ── Build strict-compliance prompt ────────────────────────────────────────
@@ -518,7 +520,7 @@ def execute_task(
 
     # ── Run agent ─────────────────────────────────────────────────────────────
     all_messages, result_msg, had_error = asyncio.run(
-        _run_agent(prompt, workspace_dir, task_id, allowed_tools)
+        _run_agent(prompt, workspace_dir, task_id, allowed_tools, disallowed_tools)
     )
 
     num_turns         = result_msg.num_turns if result_msg else 0
