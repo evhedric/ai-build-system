@@ -54,6 +54,9 @@ try:
         ToolUseBlock,
         query,
     )
+    from claude_code_sdk._internal.message_parser import parse_message as _sdk_parse_message
+    from claude_code_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
+    from claude_code_sdk._errors import MessageParseError
     _sdk_available = True
 except ImportError:
     _sdk_available = False
@@ -289,30 +292,71 @@ async def _run_agent(
     """
     Launch the Claude Code agent and collect all messages.
 
+    Uses SubprocessCLITransport directly (bypassing query()) so we can
+    silently skip message types that the SDK version doesn't know about
+    (e.g. 'rate_limit_event' added in CLI 2.1.111 but absent from SDK 0.0.25).
+    This makes the executor resilient to CLI/SDK version drift.
+
     The agent runs with:
       cwd             = workspace_dir   (path-containment safety)
       permission_mode = "acceptEdits"   (auto-accept file writes)
+      system_prompt   = _EXECUTOR_SYSTEM_PROMPT  (behavioral locking)
       max_turns       = 30              (generous for complex tasks)
 
     Returns:
         (all_messages, result_message, had_error)
     """
+    # Message types emitted by the CLI that we silently skip rather than crash on.
+    # rate_limit_event was added in CLI 2.1.111; SDK 0.0.25 raises MessageParseError.
+    _SKIP_TYPES = frozenset({"rate_limit_event"})
+
+    # The CLI's --system-prompt flag does not accept multiline strings when
+    # using --print mode on Windows (newlines break argument parsing).
+    # Collapse all newlines + blank lines to single spaces so the prompt
+    # fits on one logical line while preserving the full rule set.
+    _system_prompt_flat = " ".join(
+        line.strip() for line in _EXECUTOR_SYSTEM_PROMPT.splitlines() if line.strip()
+    )
+
     options = ClaudeCodeOptions(
         allowed_tools=allowed_tools,
         cwd=workspace_dir,
         max_turns=30,
         permission_mode="acceptEdits",
-        system_prompt=_EXECUTOR_SYSTEM_PROMPT,
+        system_prompt=_system_prompt_flat,
     )
+
+    transport = SubprocessCLITransport(prompt=prompt, options=options)
 
     all_messages: list[Any] = []
     result_msg:   ResultMessage | None = None
     had_error = False
 
     try:
-        async for msg in query(prompt=prompt, options=options):
+        await transport.connect()
+
+        async for raw_data in transport.read_messages():
+            msg_type = raw_data.get("type", "")
+
+            # Skip known-but-unhandled message types (e.g. rate_limit_event)
+            if msg_type in _SKIP_TYPES:
+                executor_log.debug(
+                    "[%s] Skipping CLI message type '%s'", task_id, msg_type
+                )
+                continue
+
+            try:
+                msg = _sdk_parse_message(raw_data)
+            except MessageParseError as exc:
+                executor_log.warning(
+                    "[%s] Could not parse CLI message (type=%r): %s — skipping",
+                    task_id, msg_type, exc,
+                )
+                continue
+
             all_messages.append(msg)
             _log_agent_message(msg, task_id)
+
             if isinstance(msg, ResultMessage):
                 result_msg = msg
                 if msg.is_error:
@@ -320,9 +364,12 @@ async def _run_agent(
                     executor_log.error(
                         "[%s] Agent reported error: %s", task_id, msg.result
                     )
+
     except Exception as exc:
         executor_log.error("[%s] Agent raised exception: %s", task_id, exc)
         had_error = True
+    finally:
+        await transport.close()
 
     return all_messages, result_msg, had_error
 
