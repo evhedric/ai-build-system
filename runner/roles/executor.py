@@ -384,6 +384,48 @@ async def _run_agent(
 
 
 # ---------------------------------------------------------------------------
+# Direct file writer (for steps with explicit content)
+# ---------------------------------------------------------------------------
+
+def _write_file_step(
+    step: dict[str, Any],
+    workspace_dir: Path,
+    task_id: str,
+) -> tuple[str, str, str | None]:
+    """
+    Write a create_file / modify_file / document step directly to disk.
+
+    This bypasses the Claude Code agent entirely — the plan content is
+    written verbatim, so the agent's training priors cannot override it.
+
+    Returns:
+        (relative_path, status, error_message | None)
+    """
+    target  = step.get("target", "").strip()
+    details = step.get("details", "").strip()
+
+    if not target:
+        return ("", "skipped", "step has no target path")
+
+    abs_path = workspace_dir / target
+    _validate_path_in_workspace(abs_path, workspace_dir)
+
+    try:
+        abs_path.parent.mkdir(parents=True, exist_ok=True)
+        abs_path.write_text(details, encoding="utf-8")
+        executor_log.info(
+            "[%s] Wrote file: %s (%d bytes)",
+            task_id, target, len(details),
+        )
+        return (target, "written", None)
+    except Exception as exc:
+        executor_log.error(
+            "[%s] Failed to write file %s: %s", task_id, target, exc
+        )
+        return (target, "failed", str(exc))
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -393,12 +435,20 @@ def execute_task(
     workspace_info: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    Execute the full plan for a task using the Claude Code SDK agent.
+    Execute the full plan for a task.
 
-    A single rich prompt encodes the task context and all plan steps.  The
-    Claude Code agent then operates autonomously inside workspace_dir — it
-    reads, writes, and runs commands without any step-by-step orchestration
-    from the Python side.
+    HYBRID EXECUTION STRATEGY
+    ─────────────────────────
+    File steps (create_file, modify_file, document):
+      Written directly to disk from the plan's ``details`` content.
+      This is deterministic — the exact planned content is always written,
+      bypassing any risk of the agent substituting its own interpretation.
+
+    Command steps (run_command):
+      Executed via the Claude Code SDK agent so the agent can observe
+      command output, handle errors, and adapt as needed.
+
+    If no run_command steps exist, the agent is not invoked at all.
 
     Args:
         task:           Task packet (must contain task_id).
@@ -408,10 +458,6 @@ def execute_task(
 
     Returns:
         ExecutionResult packet (also saved to /artifacts/{task_id}.json).
-
-    Raises:
-        RuntimeError: If claude-code-sdk or claude CLI is missing, or API key not set.
-        ValueError:   If workspace_info is incomplete or workspace does not exist.
     """
     task_id = task["task_id"]
 
@@ -438,7 +484,7 @@ def execute_task(
         f"workspace={workspace_dir}  branch={branch_name!r}  project={project_id}",
     )
     executor_log.info(
-        "[%s] Executing task (agentic) | project=%s branch=%s workspace=%s",
+        "[%s] Executing task (hybrid) | project=%s branch=%s workspace=%s",
         task_id, project_id, branch_name, workspace_dir,
     )
 
@@ -451,41 +497,84 @@ def execute_task(
     if not ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY is not set in your .env file")
 
-    # ── Build prompt ──────────────────────────────────────────────────────────
-    prompt = build_executor_prompt(task, plan, workspace_dir)
-    n_steps = len(plan.get("steps", []))
-    executor_log.info(
-        "[%s] Built executor prompt | steps=%d chars=%d",
-        task_id, n_steps, len(prompt),
-    )
+    steps = plan.get("steps", [])
+    issues:         list[str] = []
+    steps_completed: list[dict[str, Any]] = []
+    files_written:   list[str] = []   # directly written (not via agent)
 
-    # ── Resolve allowed tools ─────────────────────────────────────────────────
-    # Read/Write/Edit/Bash cover all file and command operations.
-    # Glob/Grep let the agent navigate and search the workspace.
-    # The SDK's cwd option enforces workspace containment at the process level.
-    allowed_tools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
+    # ── Phase 1: Write all file steps directly ────────────────────────────────
+    FILE_ACTIONS = {"create_file", "modify_file", "document"}
+    file_steps    = [s for s in steps if (s.get("action_type") or s.get("type", "")) in FILE_ACTIONS]
+    command_steps = [s for s in steps if (s.get("action_type") or s.get("type", "")) == "run_command"]
 
     executor_log.info(
-        "[%s] Launching Claude Code agent | max_turns=30 tools=%s cwd=%s",
-        task_id, allowed_tools, workspace_dir,
+        "[%s] Plan split: %d file step(s), %d command step(s)",
+        task_id, len(file_steps), len(command_steps),
     )
 
-    # ── Run agent (async → sync bridge) ──────────────────────────────────────
-    # asyncio.run() creates a fresh event loop for this synchronous call site.
-    # This is safe because the rest of the pipeline is fully synchronous.
-    all_messages, result_msg, had_error = asyncio.run(
-        _run_agent(prompt, workspace_dir, task_id, allowed_tools)
-    )
+    for step in file_steps:
+        sid = step.get("step_id", "?")
+        target, status, err = _write_file_step(step, workspace_dir, task_id)
+        if status == "written":
+            files_written.append(target)
+            steps_completed.append(
+                make_step_result(step_id=sid, status="completed",
+                                 output=f"Wrote {target}")
+            )
+        elif status == "skipped":
+            executor_log.warning("[%s] Skipped step %s: %s", task_id, sid, err)
+            steps_completed.append(
+                make_step_result(step_id=sid, status="skipped", output=err or "")
+            )
+        else:  # failed
+            issues.append(f"Step {sid}: failed to write {target}: {err}")
+            steps_completed.append(
+                make_step_result(step_id=sid, status="failed", output=err or "")
+            )
 
-    num_turns = result_msg.num_turns if result_msg else 0
-    agent_result_text = (result_msg.result or "") if result_msg else ""
+    # ── Phase 2: Run command steps via Claude Code agent ─────────────────────
+    num_turns         = 0
+    agent_result_text = ""
+    had_agent_error   = False
 
-    executor_log.info(
-        "[%s] Agent complete | turns=%d had_error=%s",
-        task_id, num_turns, had_error,
-    )
+    if command_steps:
+        # Build a focused agent prompt — file writes are already done.
+        cmd_prompt = build_executor_prompt(task, {**plan, "steps": command_steps}, workspace_dir)
+        allowed_tools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
 
-    # ── Discover what the agent created / modified ────────────────────────────
+        executor_log.info(
+            "[%s] Launching Claude Code agent for %d command step(s)",
+            task_id, len(command_steps),
+        )
+
+        all_messages, result_msg, had_agent_error = asyncio.run(
+            _run_agent(cmd_prompt, workspace_dir, task_id, allowed_tools)
+        )
+        num_turns         = result_msg.num_turns if result_msg else 0
+        agent_result_text = (result_msg.result or "") if result_msg else ""
+
+        executor_log.info(
+            "[%s] Agent complete | turns=%d had_error=%s",
+            task_id, num_turns, had_agent_error,
+        )
+
+        if had_agent_error:
+            issues.append(f"Agent reported error: {agent_result_text[:200]}")
+
+        # Add a synthetic step entry for the agent's work
+        step_status = "failed" if had_agent_error else "completed"
+        for step in command_steps:
+            sid = step.get("step_id", "?")
+            steps_completed.append(
+                make_step_result(
+                    step_id=sid, status=step_status,
+                    output=agent_result_text[:300] if agent_result_text else f"Agent ran {num_turns} turns.",
+                )
+            )
+    else:
+        executor_log.info("[%s] No command steps — skipping agent invocation", task_id)
+
+    # ── Discover all workspace changes (file writes + agent commands) ──────────
     files_created, files_modified = _discover_workspace_changes(workspace_dir)
 
     executor_log.info(
@@ -500,7 +589,8 @@ def execute_task(
     # ── Stage and commit all changes to the project repo worktree ─────────────
     commit_msg = (
         f"[{task_id}] {task.get('title', 'Task execution')}\n\n"
-        f"Agentic execution: {num_turns} agent turns.\n"
+        f"Hybrid execution: {len(files_written)} file(s) written directly, "
+        f"{num_turns} agent turn(s).\n"
         f"Files created:  {', '.join(files_created)  or 'none'}\n"
         f"Files modified: {', '.join(files_modified) or 'none'}"
     )
@@ -517,26 +607,10 @@ def execute_task(
         executor_log.info("[%s] No staged changes to commit", task_id)
 
     # ── Build and persist result packet ──────────────────────────────────────
-    issues: list[str] = []
-    if had_error:
-        issues.append(f"Agent reported error: {agent_result_text[:200]}")
-
-    # The agentic run is represented as a single synthetic step so the
-    # ExecutionResult schema (steps_completed list) remains satisfied for the
-    # reviewer and pipeline without any schema changes.
-    step_status = "failed" if had_error else "completed"
-    steps_completed = [
-        make_step_result(
-            step_id=1,
-            status=step_status,
-            output=agent_result_text[:500] if agent_result_text else f"Agent ran {num_turns} turns.",
-        )
-    ]
-
     summary = (
-        f"Agent completed {num_turns} turns. "
-        f"Created: {len(files_created)} file(s). "
-        f"Modified: {len(files_modified)} file(s)."
+        f"Wrote {len(files_written)} file(s) directly. "
+        f"Agent ran {num_turns} turn(s). "
+        f"Workspace: {len(files_created)} created, {len(files_modified)} modified."
         + (f" Issues: {len(issues)}." if issues else "")
     )
 
