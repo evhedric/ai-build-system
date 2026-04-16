@@ -106,16 +106,17 @@ STRICT RULES:
       - npx tailwindcss init
       - npx --yes tailwindcss init
     Including them will fail or corrupt the already-correct configuration.
-15. NEVER include a command that starts a long-running server or process. These
-    commands run indefinitely and will block autonomous execution forever:
+15. NEVER include a command that starts a persistent server or long-running process.
+    These commands run indefinitely and will block autonomous execution:
       - npm run dev
       - npm start
-      - node <any-file>.js   ← ALWAYS FORBIDDEN, even for a "test" or "verify" step
-      - node index.js, node app.js, node server.js, etc.
-    This includes ANY invocation of "node <filename>" as a run step.
-    The executor has no way to stop a blocking server — the step will time out and
-    be marked failed. Plans must contain only file-creation, installation, and
-    build steps that terminate on their own.
+      - npm run start
+    One-shot node scripts that print output and exit are ALLOWED:
+      - node index.js     ← OK if the script terminates (e.g. console.log)
+      - node -e "..."     ← OK for inline one-shot scripts
+    The distinction: does the command exit on its own? If the script contains
+    http.listen(), createServer(), or any event-loop keep-alive, it will never
+    exit — do NOT include it. If the script just logs output and exits, it is safe.
 
 Return only valid JSON.
 """

@@ -60,14 +60,22 @@ def _has_disallowed_text(command: str) -> List[str]:
     if stripped.startswith("pip install "):
         reasons.append("bare pip install is forbidden; use 'python -m pip install ...'")
 
-    # Block `node <file>.js` — starts a persistent server that never terminates.
-    # Allow `node -e "..."`, `node --version`, `node -p "..."` (flags/inline scripts).
-    if re.match(r"^node\s+[a-zA-Z0-9_./@\\-].*\.js", stripped, re.IGNORECASE):
-        reasons.append(
-            "running 'node <file>.js' is forbidden — it starts a blocking server "
-            "that never terminates in autonomous execution. "
-            "Use 'node -e \"...\"' for one-shot scripts only."
-        )
+    # Block known persistent server-start patterns.
+    # `node -e "..."` (inline), `node --version`, and `node <script>.js` for
+    # one-shot scripts are all legitimate and allowed.
+    # The executor's 120s threading timeout is the safety net for any command
+    # that runs longer than expected.
+    _SERVER_PATTERNS = [
+        (r"^npm\s+run\s+dev\b",   "npm run dev"),
+        (r"^npm\s+start\b",       "npm start"),
+        (r"^npm\s+run\s+start\b", "npm run start"),
+    ]
+    for pattern, label in _SERVER_PATTERNS:
+        if re.match(pattern, stripped):
+            reasons.append(
+                f"'{label}' starts a persistent dev server that never terminates "
+                f"in autonomous execution — remove this step from the plan."
+            )
 
     return reasons
 
