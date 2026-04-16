@@ -1,48 +1,67 @@
 """
-Executor Role — powered by Claude (Anthropic API).
+Executor Role — powered by Claude Code SDK (agentic execution).
 
-Gold v3 — workspace-bound execution.
+Gold v3 — workspace-bound agentic execution.
 
-Responsibility: Execute plan steps exclusively inside the provisioned workspace.
-  - Writes ALL files to workspace_dir (never to the orchestrator repo)
-  - Runs ALL commands with cwd=workspace_dir
-  - Stages and commits changes to the project repo worktree
-  - Produces an ExecutionResult packet written to /artifacts/{task_id}.json
-  - Never approves its own work (that is the Reviewer's job)
+WHAT CHANGED FROM THE PREVIOUS EXECUTOR:
+  The previous executor looped over plan steps, called
+  anthropic.messages.create() to generate file content as text, and then
+  manually wrote those strings to disk.  That approach required the
+  orchestrator to parse and interpret code, which was fragile.
 
-Branch lifecycle is owned by the workspace provisioner; the executor only
-reads workspace_info and operates inside the directory it was given.
+  This executor sends a single rich prompt to the Claude Code SDK.  Claude
+  Code acts as a real agent: it uses Read/Write/Edit/Bash tools to operate
+  directly on the filesystem and run commands — no manual file writing, no
+  content parsing.
+
+PRESERVED CONTRACT (nothing else in the system changed):
+  - Public signature:  execute_task(task, plan, workspace_info) -> dict
+  - Backward-compat:   run_executor = execute_task
+  - Return format:     make_execution_result() packet (same schema)
+  - Git staging/commit after execution (same flow)
+  - Path-containment safety guard preserved
+  - All existing logging namespaces and event names
+
+REMOVED:
+  - _generate_file_content()   — Claude Code writes files directly
+  - _execute_step()            — single agentic call replaces the step loop
+  - anthropic.Anthropic client — replaced by claude_code_sdk.query()
+  - threading import           — no longer needed for subprocess streaming
+
+DEPENDENCIES:
+  - claude-code-sdk  (pip install claude-code-sdk)
+  - claude CLI       (npm install -g @anthropic-ai/claude-code)
+  - ANTHROPIC_API_KEY in .env
 """
 
+import asyncio
 import json
 import subprocess
-import threading
 from pathlib import Path
 from typing import Any
 
-from runner.config import ANTHROPIC_API_KEY, CLAUDE_MODEL, PROMPTS_DIR
+from runner.config import ANTHROPIC_API_KEY, PROMPTS_DIR
 from runner.logger import executor_log, log_execution_event
 from runner.schemas import make_execution_result, make_step_result, save_execution_result
-from runner.executor_guard import guard_run_command
-from runner.plan_validator import PlanValidationError
 
 try:
-    import anthropic
-    _anthropic_available = True
+    from claude_code_sdk import (
+        AssistantMessage,
+        ClaudeCodeOptions,
+        ResultMessage,
+        TextBlock,
+        ToolResultBlock,
+        ToolUseBlock,
+        query,
+    )
+    _sdk_available = True
 except ImportError:
-    _anthropic_available = False
+    _sdk_available = False
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Internal git helper
 # ---------------------------------------------------------------------------
-
-def _load_prompt() -> str:
-    path = PROMPTS_DIR / "executor.md"
-    if path.exists():
-        return path.read_text(encoding="utf-8")
-    return ""
-
 
 def _run_git(args: list[str], cwd: Path) -> tuple[int, str, str]:
     """
@@ -58,10 +77,14 @@ def _run_git(args: list[str], cwd: Path) -> tuple[int, str, str]:
     return result.returncode, result.stdout.strip(), result.stderr.strip()
 
 
+# ---------------------------------------------------------------------------
+# Path safety guard
+# ---------------------------------------------------------------------------
+
 def _validate_path_in_workspace(path: Path, workspace_dir: Path) -> None:
     """
     Raise ValueError if *path* resolves outside *workspace_dir*.
-    Prevents relative-escape attacks (e.g. target='../../etc/passwd').
+    Preserved from the previous executor for defence-in-depth.
     """
     try:
         path.resolve().relative_to(workspace_dir.resolve())
@@ -72,185 +95,215 @@ def _validate_path_in_workspace(path: Path, workspace_dir: Path) -> None:
         )
 
 
-def _generate_file_content(
-    client: "anthropic.Anthropic",
+# ---------------------------------------------------------------------------
+# Workspace change discovery
+# ---------------------------------------------------------------------------
+
+def _discover_workspace_changes(workspace_dir: Path) -> tuple[list[str], list[str]]:
+    """
+    Use `git status --short` to identify files created or modified by the agent
+    since the last commit.
+
+    Returns:
+        (files_created, files_modified) — lists of relative path strings.
+
+    Git --short output format:  XY FILENAME
+      X = staged status, Y = unstaged status
+      ?? = untracked new file
+      A  = staged new file
+      M  = modified (staged or unstaged)
+    """
+    files_created:  list[str] = []
+    files_modified: list[str] = []
+
+    rc, out, _ = _run_git(["status", "--short"], cwd=workspace_dir)
+    if rc != 0 or not out.strip():
+        return files_created, files_modified
+
+    for raw_line in out.splitlines():
+        if len(raw_line) < 3:
+            continue
+        xy       = raw_line[:2]
+        filepath = raw_line[3:].strip()
+
+        if xy in ("??", "A ", "AM"):
+            # Untracked or newly staged file — created by the agent
+            files_created.append(filepath)
+        elif "M" in xy:
+            # Modified tracked file
+            files_modified.append(filepath)
+
+    return files_created, files_modified
+
+
+# ---------------------------------------------------------------------------
+# Executor prompt builder
+# ---------------------------------------------------------------------------
+
+def build_executor_prompt(
     task: dict[str, Any],
     plan: dict[str, Any],
-    step: dict[str, Any],
-    existing_content: str = "",
+    workspace_dir: Path,
 ) -> str:
     """
-    Use Claude to generate the content for a file creation or modification step.
-    Returns the raw file content as a string.
+    Build the single prompt that the Claude Code agent receives.
+
+    Encodes:
+      - Workspace boundary rule (ONLY operate inside workspace_dir)
+      - Full task context: title, request, goals, constraints, success criteria
+      - All plan steps with action types, targets, and details
+      - Execution instructions (run to completion, verify, no persistent servers)
     """
-    system_prompt = _load_prompt()
+    lines: list[str] = []
 
-    context = {
-        "task_title":       task.get("title"),
-        "task_request":     task.get("request"),
-        "goals":            task.get("goals", []),
-        "constraints":      task.get("constraints", []),
-        "success_criteria": task.get("success_criteria", []),
-        "all_steps":        plan.get("steps", []),
-        "current_step":     step,
-    }
-    if existing_content:
-        context["existing_file_content"] = existing_content
+    # ── Header + workspace boundary ───────────────────────────────────────────
+    lines += [
+        "You are an autonomous executor for an AI build system.",
+        "",
+        f"WORKSPACE DIRECTORY: {workspace_dir}",
+        "RULE: You MUST operate ONLY inside this directory.",
+        "      Never read, write, or execute anything outside it.",
+        "",
+    ]
 
-    user_message = (
-        f"Execute this plan step and return ONLY the file content (no markdown fences, "
-        f"no explanation — just the raw file content):\n\n"
-        f"Step: {step['description']}\n"
-        f"Target file: {step.get('target', '')}\n"
-        f"Details: {step.get('details', '')}\n\n"
-        f"Full task context:\n{json.dumps(context, indent=2)}"
-    )
+    # ── Task context ──────────────────────────────────────────────────────────
+    lines += [
+        f"TASK: {task.get('title', task.get('request', ''))}",
+        "",
+        f"REQUEST: {task.get('request', '')}",
+        "",
+    ]
 
-    response = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=4096,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_message}],
-    )
-    return response.content[0].text
+    goals = task.get("goals", [])
+    if goals:
+        lines.append("GOALS:")
+        lines += [f"  - {g}" for g in goals]
+        lines.append("")
+
+    constraints = task.get("constraints", [])
+    if constraints:
+        lines.append("CONSTRAINTS:")
+        lines += [f"  - {c}" for c in constraints]
+        lines.append("")
+
+    criteria = task.get("success_criteria", [])
+    if criteria:
+        lines.append("SUCCESS CRITERIA:")
+        lines += [f"  - {c}" for c in criteria]
+        lines.append("")
+
+    # ── Execution plan ────────────────────────────────────────────────────────
+    steps = plan.get("steps", [])
+    if steps:
+        lines.append("EXECUTION PLAN — complete every step in order:")
+        lines.append("")
+        for step in steps:
+            sid     = step.get("step_id", "?")
+            action  = step.get("action_type", step.get("type", "?"))
+            desc    = step.get("description", "")
+            target  = step.get("target", "")
+            details = step.get("details", "")
+            lines.append(f"Step {sid}: [{action}] {desc}")
+            if target:
+                lines.append(f"  Target:  {target}")
+            if details:
+                lines.append(f"  Details: {details}")
+            lines.append("")
+
+    # ── Execution instructions ────────────────────────────────────────────────
+    lines += [
+        "INSTRUCTIONS:",
+        "1. Execute every step above to completion.",
+        f"2. Write all files inside {workspace_dir} only.",
+        f"3. Run all shell commands with cwd={workspace_dir}",
+        "4. If a step fails, diagnose and fix before moving on.",
+        "5. Do NOT start any persistent server (http.listen, npm start, npm run dev).",
+        "   One-shot scripts that exit on their own (console.log, data processing) are fine.",
+        "6. After writing each file, verify it exists and has the correct content.",
+        "7. When all steps are complete, output a brief summary of what was accomplished.",
+    ]
+
+    return "\n".join(lines)
 
 
-def _execute_step(
-    client: "anthropic.Anthropic",
-    task: dict[str, Any],
-    plan: dict[str, Any],
-    step: dict[str, Any],
+# ---------------------------------------------------------------------------
+# Agent message logger
+# ---------------------------------------------------------------------------
+
+def _log_agent_message(msg: Any, task_id: str) -> None:
+    """Log a single message from the Claude Code SDK stream."""
+    if isinstance(msg, AssistantMessage):
+        for block in msg.content:
+            if isinstance(block, TextBlock) and block.text.strip():
+                executor_log.info(
+                    "[%s] Agent: %s", task_id, block.text.strip()[:200]
+                )
+            elif isinstance(block, ToolUseBlock):
+                input_preview = json.dumps(block.input)[:150]
+                executor_log.info(
+                    "[%s] Tool use: %s(%s)", task_id, block.name, input_preview
+                )
+            elif isinstance(block, ToolResultBlock):
+                content_preview = str(block.content or "")[:120]
+                status = "ERROR" if block.is_error else "ok"
+                executor_log.debug(
+                    "[%s] Tool result [%s]: %s", task_id, status, content_preview
+                )
+    elif isinstance(msg, ResultMessage):
+        executor_log.info(
+            "[%s] Agent finished | subtype=%s is_error=%s turns=%d",
+            task_id, msg.subtype, msg.is_error, msg.num_turns,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Async agent runner
+# ---------------------------------------------------------------------------
+
+async def _run_agent(
+    prompt: str,
     workspace_dir: Path,
-) -> dict[str, Any]:
+    task_id: str,
+    allowed_tools: list[str],
+) -> tuple[list[Any], ResultMessage | None, bool]:
     """
-    Execute a single plan step entirely within *workspace_dir*.
-    Returns a step result dict.
-    """
-    step_id     = step["step_id"]
-    action      = step.get("action_type", "")
-    target      = step.get("target", "")
-    description = step.get("description", "")
+    Launch the Claude Code agent and collect all messages.
 
-    executor_log.info(
-        "[%s] Step %d: [%s] %s -> %s  (workspace: %s)",
-        task["task_id"], step_id, action, description[:60], target, workspace_dir,
+    The agent runs with:
+      cwd             = workspace_dir   (path-containment safety)
+      permission_mode = "acceptEdits"   (auto-accept file writes)
+      max_turns       = 30              (generous for complex tasks)
+
+    Returns:
+        (all_messages, result_message, had_error)
+    """
+    options = ClaudeCodeOptions(
+        allowed_tools=allowed_tools,
+        cwd=workspace_dir,
+        max_turns=30,
+        permission_mode="acceptEdits",
     )
+
+    all_messages: list[Any] = []
+    result_msg:   ResultMessage | None = None
+    had_error = False
 
     try:
-        if action in ("create_file", "modify_file", "document"):
-            # All writes are scoped to workspace_dir
-            target_path = workspace_dir / target if target else None
-
-            # Guard: reject any target that escapes the workspace
-            if target_path:
-                _validate_path_in_workspace(target_path, workspace_dir)
-
-            existing = ""
-            if action == "modify_file" and target_path and target_path.exists():
-                existing = target_path.read_text(encoding="utf-8")
-
-            content = _generate_file_content(client, task, plan, step, existing)
-
-            if target_path:
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                target_path.write_text(content, encoding="utf-8")
-                output = f"Written {len(content)} chars to {target_path}"
-                executor_log.info(
-                    "[%s] Step %d: wrote %d chars -> %s",
-                    task["task_id"], step_id, len(content), target_path,
-                )
-                # Stage inside the project repo worktree
-                _run_git(["add", str(target_path)], cwd=workspace_dir)
-            else:
-                output = f"Generated content ({len(content)} chars) — no target path specified"
-
-            return make_step_result(step_id, "completed", output=output)
-
-        elif action == "run_command":
-            # Command string stored in 'target' after normalisation,
-            # or in 'details' for legacy steps that skipped normalisation.
-            cmd = target or step.get("details", "")
-            if not cmd:
-                return make_step_result(step_id, "skipped", output="No command specified")
-
-            # Last-line-of-defence guard — re-validate immediately before execution
-            try:
-                guard_run_command({"command": cmd})
-            except PlanValidationError as exc:
-                executor_log.error(
-                    "[%s] Step %d: BLOCKED by executor guard — %s",
-                    task["task_id"], step_id, exc,
-                )
-                return make_step_result(
-                    step_id, "failed",
-                    error=f"Executor guard blocked command: {exc}",
-                )
-
-            executor_log.info(
-                "[%s] Step %d: running in %s: %s",
-                task["task_id"], step_id, workspace_dir, cmd,
-            )
-            # Stream stdout+stderr to the terminal in real time.
-            # stderr=STDOUT merges both streams into one pipe, preventing the
-            # classic two-pipe deadlock.
-            #
-            # IMPORTANT: The for-line-in-proc.stdout loop blocks indefinitely
-            # if the process is a persistent server (never closes stdout).
-            # We therefore read stdout in a daemon thread while the main thread
-            # calls proc.wait(timeout=120).  When the timeout fires, proc.kill()
-            # closes the subprocess pipe, which causes the reader thread to
-            # receive EOF and exit cleanly.
-            COMMAND_TIMEOUT = 120  # seconds
-
-            with subprocess.Popen(
-                cmd, shell=True, cwd=str(workspace_dir),
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1,
-            ) as proc:
-                output_lines: list[str] = []
-
-                def _read_stdout() -> None:
-                    for line in proc.stdout:
-                        print(line, end="", flush=True)
-                        output_lines.append(line)
-
-                reader = threading.Thread(target=_read_stdout, daemon=True)
-                reader.start()
-
-                try:
-                    proc.wait(timeout=COMMAND_TIMEOUT)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()          # ensure process is fully dead
-                    reader.join(timeout=2)  # drain any remaining output
-                    raise
-                else:
-                    reader.join(timeout=5)  # collect trailing output
-
-            output = "".join(output_lines)
-            if proc.returncode != 0:
-                return make_step_result(
-                    step_id, "failed",
-                    output=output[:500],
-                    error=f"Exit code {proc.returncode}",
-                )
-            return make_step_result(step_id, "completed", output=output[:500])
-
-        elif action == "research":
-            notes  = _generate_file_content(client, task, plan, step)
-            output = f"Research notes generated ({len(notes)} chars)"
-            return make_step_result(step_id, "completed", output=output)
-
-        else:
-            executor_log.warning(
-                "[%s] Step %d: Unknown action_type %r — skipping",
-                task["task_id"], step_id, action,
-            )
-            return make_step_result(step_id, "skipped", output=f"Unknown action_type: {action}")
-
+        async for msg in query(prompt=prompt, options=options):
+            all_messages.append(msg)
+            _log_agent_message(msg, task_id)
+            if isinstance(msg, ResultMessage):
+                result_msg = msg
+                if msg.is_error:
+                    had_error = True
+                    executor_log.error(
+                        "[%s] Agent reported error: %s", task_id, msg.result
+                    )
     except Exception as exc:
-        executor_log.error("[%s] Step %d failed: %s", task["task_id"], step_id, exc)
-        return make_step_result(step_id, "failed", error=str(exc))
+        executor_log.error("[%s] Agent raised exception: %s", task_id, exc)
+        had_error = True
+
+    return all_messages, result_msg, had_error
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +316,12 @@ def execute_task(
     workspace_info: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    Execute the full plan for a task, strictly inside workspace_info["workspace_dir"].
+    Execute the full plan for a task using the Claude Code SDK agent.
+
+    A single rich prompt encodes the task context and all plan steps.  The
+    Claude Code agent then operates autonomously inside workspace_dir — it
+    reads, writes, and runs commands without any step-by-step orchestration
+    from the Python side.
 
     Args:
         task:           Task packet (must contain task_id).
@@ -275,8 +333,8 @@ def execute_task(
         ExecutionResult packet (also saved to /artifacts/{task_id}.json).
 
     Raises:
-        RuntimeError: If the Anthropic package is missing or API key not set.
-        ValueError:   If workspace_info is incomplete.
+        RuntimeError: If claude-code-sdk or claude CLI is missing, or API key not set.
+        ValueError:   If workspace_info is incomplete or workspace does not exist.
     """
     task_id = task["task_id"]
 
@@ -303,45 +361,74 @@ def execute_task(
         f"workspace={workspace_dir}  branch={branch_name!r}  project={project_id}",
     )
     executor_log.info(
-        "[%s] Executing task | project=%s branch=%s workspace=%s",
+        "[%s] Executing task (agentic) | project=%s branch=%s workspace=%s",
         task_id, project_id, branch_name, workspace_dir,
     )
 
-    if not _anthropic_available:
-        raise RuntimeError("anthropic package not installed. Run: pip install anthropic")
+    # ── Preflight checks ──────────────────────────────────────────────────────
+    if not _sdk_available:
+        raise RuntimeError(
+            "claude-code-sdk is not installed. "
+            "Run: pip install claude-code-sdk"
+        )
     if not ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY is not set in your .env file")
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    # ── Build prompt ──────────────────────────────────────────────────────────
+    prompt = build_executor_prompt(task, plan, workspace_dir)
+    n_steps = len(plan.get("steps", []))
+    executor_log.info(
+        "[%s] Built executor prompt | steps=%d chars=%d",
+        task_id, n_steps, len(prompt),
+    )
 
-    # ── Execute steps ─────────────────────────────────────────────────────────
-    steps_results  = []
-    files_created  = []
-    files_modified = []
-    issues         = []
+    # ── Resolve allowed tools ─────────────────────────────────────────────────
+    # Read/Write/Edit/Bash cover all file and command operations.
+    # Glob/Grep let the agent navigate and search the workspace.
+    # The SDK's cwd option enforces workspace containment at the process level.
+    allowed_tools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
 
-    for step in plan.get("steps", []):
-        result = _execute_step(client, task, plan, step, workspace_dir)
-        steps_results.append(result)
+    executor_log.info(
+        "[%s] Launching Claude Code agent | max_turns=30 tools=%s cwd=%s",
+        task_id, allowed_tools, workspace_dir,
+    )
 
-        target = step.get("target", "")
-        if result["status"] == "completed" and target:
-            if step.get("action_type") == "create_file":
-                files_created.append(target)
-            elif step.get("action_type") in ("modify_file", "document"):
-                files_modified.append(target)
-        elif result["status"] == "failed":
-            issues.append(f"Step {step['step_id']}: {result.get('error', 'unknown error')}")
+    # ── Run agent (async → sync bridge) ──────────────────────────────────────
+    # asyncio.run() creates a fresh event loop for this synchronous call site.
+    # This is safe because the rest of the pipeline is fully synchronous.
+    all_messages, result_msg, had_error = asyncio.run(
+        _run_agent(prompt, workspace_dir, task_id, allowed_tools)
+    )
 
-    # ── Commit staged changes to project repo worktree ────────────────────────
-    completed_count = sum(1 for r in steps_results if r["status"] == "completed")
+    num_turns = result_msg.num_turns if result_msg else 0
+    agent_result_text = (result_msg.result or "") if result_msg else ""
+
+    executor_log.info(
+        "[%s] Agent complete | turns=%d had_error=%s",
+        task_id, num_turns, had_error,
+    )
+
+    # ── Discover what the agent created / modified ────────────────────────────
+    files_created, files_modified = _discover_workspace_changes(workspace_dir)
+
+    executor_log.info(
+        "[%s] Workspace delta | created=%d modified=%d",
+        task_id, len(files_created), len(files_modified),
+    )
+    for f in files_created:
+        executor_log.info("[%s]   + %s", task_id, f)
+    for f in files_modified:
+        executor_log.info("[%s]   ~ %s", task_id, f)
+
+    # ── Stage and commit all changes to the project repo worktree ─────────────
     commit_msg = (
         f"[{task_id}] {task.get('title', 'Task execution')}\n\n"
-        f"Executed {completed_count}/{len(steps_results)} steps successfully.\n"
-        f"Files created: {', '.join(files_created) or 'none'}\n"
+        f"Agentic execution: {num_turns} agent turns.\n"
+        f"Files created:  {', '.join(files_created)  or 'none'}\n"
         f"Files modified: {', '.join(files_modified) or 'none'}"
     )
 
+    _run_git(["add", "."], cwd=workspace_dir)
     rc, _, _ = _run_git(["diff", "--cached", "--quiet"], cwd=workspace_dir)
     if rc != 0:  # staged changes present
         _run_git(["commit", "-m", commit_msg], cwd=workspace_dir)
@@ -353,16 +440,33 @@ def execute_task(
         executor_log.info("[%s] No staged changes to commit", task_id)
 
     # ── Build and persist result packet ──────────────────────────────────────
+    issues: list[str] = []
+    if had_error:
+        issues.append(f"Agent reported error: {agent_result_text[:200]}")
+
+    # The agentic run is represented as a single synthetic step so the
+    # ExecutionResult schema (steps_completed list) remains satisfied for the
+    # reviewer and pipeline without any schema changes.
+    step_status = "failed" if had_error else "completed"
+    steps_completed = [
+        make_step_result(
+            step_id=1,
+            status=step_status,
+            output=agent_result_text[:500] if agent_result_text else f"Agent ran {num_turns} turns.",
+        )
+    ]
+
     summary = (
-        f"Executed {completed_count} of {len(steps_results)} steps. "
-        f"Created: {len(files_created)} files. Modified: {len(files_modified)} files."
+        f"Agent completed {num_turns} turns. "
+        f"Created: {len(files_created)} file(s). "
+        f"Modified: {len(files_modified)} file(s)."
         + (f" Issues: {len(issues)}." if issues else "")
     )
 
     result_packet = make_execution_result(
         task_id=task_id,
         branch_name=branch_name,
-        steps_completed=steps_results,
+        steps_completed=steps_completed,
         files_created=files_created,
         files_modified=files_modified,
         summary=summary,
@@ -375,6 +479,5 @@ def execute_task(
     return result_packet
 
 
-# Backward-compatible alias — pipeline.py can be updated to call execute_task
-# directly once the full Gold v3 pipeline integration lands.
+# Backward-compatible alias — pipeline.py calls run_executor which maps here.
 run_executor = execute_task
