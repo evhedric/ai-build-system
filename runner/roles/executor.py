@@ -13,7 +13,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from runner.config import ANTHROPIC_API_KEY, CLAUDE_MODEL, PROMPTS_DIR, BASE_DIR, WORKSPACE_DIR
+from runner.config import ANTHROPIC_API_KEY, CLAUDE_MODEL, PROMPTS_DIR, BASE_DIR, resolve_workspace
 from runner.logger import executor_log, log_execution_event
 from runner.schemas import make_execution_result, make_step_result, save_execution_result
 from runner.executor_guard import guard_run_command
@@ -121,6 +121,7 @@ def _execute_step(
     task: dict,
     plan: dict,
     step: dict,
+    workspace: Path,
 ) -> dict:
     """Execute a single plan step. Returns a step result dict."""
     step_id = step["step_id"]
@@ -186,7 +187,7 @@ def _execute_step(
             # is read, which prevents the pipe-buffer deadlock that can occur
             # when capturing stdout and stderr separately.
             with subprocess.Popen(
-                cmd, shell=True, cwd=str(WORKSPACE_DIR),
+                cmd, shell=True, cwd=str(workspace),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1,
             ) as proc:
@@ -249,22 +250,22 @@ next-env.d.ts
 """
 
 
-def _ensure_workspace_git_repo(task_id: str) -> None:
+def _ensure_workspace_git_repo(task_id: str, workspace: Path) -> None:
     """
     After plan steps complete, ensure the workspace is a standalone git repo.
     - Runs `git init` if no .git directory exists yet.
     - Creates a standard Next.js .gitignore if one is absent.
     The workspace repo is entirely separate from the AI builder repo.
     """
-    git_dir = WORKSPACE_DIR / ".git"
+    git_dir = workspace / ".git"
     if not git_dir.exists():
-        rc, out, err = _run_git(["init"], cwd=WORKSPACE_DIR)
+        rc, out, err = _run_git(["init"], cwd=workspace)
         if rc == 0:
-            executor_log.info("[%s] Workspace git repo initialized: %s", task_id, WORKSPACE_DIR)
+            executor_log.info("[%s] Workspace git repo initialized: %s", task_id, workspace)
         else:
             executor_log.warning("[%s] git init in workspace failed: %s", task_id, err)
 
-    gitignore_path = WORKSPACE_DIR / ".gitignore"
+    gitignore_path = workspace / ".gitignore"
     if not gitignore_path.exists():
         gitignore_path.write_text(_NEXTJS_GITIGNORE, encoding="utf-8")
         executor_log.info("[%s] Created workspace .gitignore", task_id)
@@ -289,9 +290,10 @@ def run_executor(task: dict, plan: dict) -> dict:
     # Create/checkout the task branch
     _ensure_branch(branch_name, task_id)
 
-    # Confirm workspace isolation: all run_command subprocesses execute here
-    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
-    executor_log.info("[%s] Execution workspace: %s", task_id, WORKSPACE_DIR)
+    # Resolve per-task workspace (defaults to "perchiq" if not specified)
+    project_name = task.get("project", "perchiq")
+    workspace = resolve_workspace(project_name)
+    executor_log.info("[%s] Execution workspace: %s  (project=%r)", task_id, workspace, project_name)
 
     steps_results = []
     files_created = []
@@ -299,7 +301,7 @@ def run_executor(task: dict, plan: dict) -> dict:
     issues = []
 
     for step in plan.get("steps", []):
-        result = _execute_step(client, task, plan, step)
+        result = _execute_step(client, task, plan, step, workspace)
         steps_results.append(result)
 
         target = step.get("target", "")
@@ -312,7 +314,7 @@ def run_executor(task: dict, plan: dict) -> dict:
             issues.append(f"Step {step['step_id']}: {result.get('error', 'unknown error')}")
 
     # Ensure the workspace is a standalone git repo for the built project
-    _ensure_workspace_git_repo(task_id)
+    _ensure_workspace_git_repo(task_id, workspace)
 
     # Commit all staged changes
     completed_count = sum(1 for r in steps_results if r["status"] == "completed")

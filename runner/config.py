@@ -40,13 +40,24 @@ PROMPTS_DIR = BASE_DIR / "prompts"
 SCHEMAS_DIR = BASE_DIR / "schemas"
 
 # --- Workspace Isolation ---
-# All build task subprocesses execute inside WORKSPACE_DIR, not the repo root.
-# The workspace lives on local disk (outside OneDrive) so large build artifacts
-# (node_modules, .next) don't sync to the cloud and don't touch the AI builder repo.
-WORKSPACE_DIR = Path("C:/dev/workspaces/perchiq")
+# Build task subprocesses run inside a per-project workspace on local disk
+# (outside OneDrive) so artifacts (node_modules, .next) don't cloud-sync and
+# never touch the AI builder repo tree.
+# Each task resolves its own workspace via:
+#   project_name = task.get("project", "perchiq")
+#   workspace    = resolve_workspace(project_name)
+WORKSPACES_ROOT = Path("C:/dev/workspaces")
+
+
+def resolve_workspace(project_name: str = "perchiq") -> Path:
+    """Return (and auto-create) the workspace directory for a given project."""
+    workspace = WORKSPACES_ROOT / project_name
+    workspace.mkdir(parents=True, exist_ok=True)
+    return workspace
+
 
 # Ensure all directories exist at import time
-for _dir in [TASKS_DIR, PLANS_DIR, ARTIFACTS_DIR, REVIEWS_DIR, STATE_DIR, LOGS_DIR, PROMPTS_DIR, SCHEMAS_DIR, WORKSPACE_DIR]:
+for _dir in [TASKS_DIR, PLANS_DIR, ARTIFACTS_DIR, REVIEWS_DIR, STATE_DIR, LOGS_DIR, PROMPTS_DIR, SCHEMAS_DIR, WORKSPACES_ROOT]:
     _dir.mkdir(parents=True, exist_ok=True)
 
 
