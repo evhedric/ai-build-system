@@ -140,24 +140,53 @@ def _discover_workspace_changes(workspace_dir: Path) -> tuple[list[str], list[st
 
 
 # ---------------------------------------------------------------------------
-# Executor prompt builder
+# Strict compliance system prompt + prompt builder
 # ---------------------------------------------------------------------------
 
 _EXECUTOR_SYSTEM_PROMPT = """\
-You are an autonomous code executor embedded in an AI build pipeline.
+You are a deterministic execution engine.
 
-Your ONLY job is to immediately create files and run commands as instructed in each task.
+You do NOT think, design, or improve anything.
 
-Rules (non-negotiable):
-- Use the Write tool to create the first file BEFORE doing anything else.
-- Do NOT read memory files, project history, or other task workspaces.
-- Do NOT explore the filesystem before acting.
-- Do NOT ask questions or wait for confirmation.
-- Execute every step in the order given, then stop.
-- All file paths are absolute. Write files exactly where specified.
-- Never start a persistent server (http.listen / npm start / npm run dev).
-- When finished, output a short summary of every file created and every command run.
+You ONLY execute instructions exactly as written.
+
+STRICT RULES:
+- You may ONLY create or modify files explicitly listed in the steps
+- You must write EXACT content provided — no changes, no additions
+- You may NOT create additional files
+- You may NOT modify files not listed
+- You may NOT create folders unless explicitly specified
+- You may NOT scaffold or initialize anything
+- You may NOT use prior knowledge or patterns
+- You may NOT explore the workspace
+- You may NOT read files unless instructed
+- You must execute steps in exact order
+- If a step is unclear, do NOT guess — do nothing
+
+If you violate ANY rule, the task is considered FAILED.
 """
+
+# Execution modes — determined from plan content, not task type.
+_MODE_FILE    = "FILE_EXECUTION"
+_MODE_COMMAND = "COMMAND_EXECUTION"
+
+# Action types that constitute file steps.
+_FILE_ACTIONS = frozenset({"create_file", "modify_file", "document"})
+
+
+def _detect_mode(steps: list[dict[str, Any]]) -> str:
+    """
+    Return FILE_EXECUTION if any step writes a file; COMMAND_EXECUTION otherwise.
+
+    FILE_EXECUTION takes precedence: a plan with both file and command steps is
+    still FILE_EXECUTION — the agent receives all steps and the allowed-tool set
+    is restricted to file-write tools only (Bash is excluded).
+    """
+    for step in steps:
+        action = step.get("action_type") or step.get("type", "")
+        if action in _FILE_ACTIONS:
+            return _MODE_FILE
+    return _MODE_COMMAND
 
 
 def build_executor_prompt(
@@ -166,93 +195,93 @@ def build_executor_prompt(
     workspace_dir: Path,
 ) -> str:
     """
-    Build the imperative query prompt sent to the Claude Code agent.
+    Build the strict-compliance query prompt for the Claude Code agent.
 
-    Design rules:
-    - Opens with an action verb ("Create" / "Write") on the very first line so
-      the agent's natural first response is a Write tool call, not exploration.
-    - Every file step is expressed as an absolute path + what to put in it.
-    - Every command step is expressed as: run <cmd> in <workspace_dir>.
-    - Ends with a single anti-exploration reminder, not an extended preamble.
+    Contract format:
+      FILE steps  → absolute path + ===BEGIN/END FILE CONTENT=== delimiters
+      CMD steps   → "Run this command EXACTLY:" + bare command string
 
-    The system_prompt (_EXECUTOR_SYSTEM_PROMPT) handles role/behavior locking.
-    This query prompt carries only the concrete task instructions.
+    Mode-specific constraints and a hard STOP condition are appended.
+    No language that could trigger scaffolding, project setup, or exploration
+    is present anywhere in this prompt.
     """
-    ws = str(workspace_dir)
+    ws    = str(workspace_dir)
     steps = plan.get("steps", [])
+    mode  = _detect_mode(steps)
 
     lines: list[str] = []
 
-    # ── Opening action line ───────────────────────────────────────────────────
-    # Must start with a verb so the model's first natural act is tool use.
+    # ── Opening: workspace reference only — no "create project" language ──────
     lines += [
-        f"Create and write the required project files in this workspace: {ws}",
+        f"Workspace: {ws}",
         "",
-        f"Task: {task.get('title', task.get('request', ''))}",
-        f"Goal: {task.get('request', '')}",
+        "Execute the following steps EXACTLY as specified.",
+        "Do NOT perform any action not explicitly listed below.",
         "",
     ]
 
-    if task.get("success_criteria"):
-        lines.append("Success criteria:")
-        lines += [f"  - {c}" for c in task["success_criteria"]]
-        lines.append("")
+    # ── Steps as strict contracts ─────────────────────────────────────────────
+    for step in steps:
+        sid    = step.get("step_id", "?")
+        action = step.get("action_type") or step.get("type", "")
+        target = step.get("target", "")
+        details = step.get("details", "")
 
-    # ── Steps as direct imperatives ───────────────────────────────────────────
-    if steps:
-        lines.append("Execute these steps in order — start with step 1 immediately:")
-        lines.append("")
-        for step in steps:
-            sid    = step.get("step_id", "?")
-            action = step.get("action_type", step.get("type", ""))
-            desc   = step.get("description", "")
-            target = step.get("target", "")
-            details = step.get("details", "")
+        if action in _FILE_ACTIONS:
+            abs_target = f"{ws}\\{target}" if target else ws
+            lines += [
+                f"Step {sid}:",
+                "Write file at:",
+                abs_target,
+                "",
+                "Write EXACTLY this content:",
+                "",
+                "===BEGIN FILE CONTENT===",
+            ]
+            lines += details.splitlines() if details else [""]
+            lines += [
+                "===END FILE CONTENT===",
+                "",
+            ]
 
-            if action in ("create_file", "modify_file", "document"):
-                abs_target = f"{ws}\\{target}" if target else ws
-                lines.append(f"Step {sid}: Write file `{abs_target}`")
-                lines.append(f"  Purpose: {desc}")
-                if details:
-                    # If the details field contains actual file content (code, text),
-                    # present it as the required content to write — not just "guidance".
-                    # This prevents the agent from substituting its own interpretation.
-                    lines.append(f"  Write EXACTLY this content to the file:")
-                    lines.append("  ```")
-                    for content_line in details.splitlines():
-                        lines.append(f"  {content_line}")
-                    lines.append("  ```")
-                else:
-                    lines.append(f"  (Implement the full required functionality for: {desc})")
+        elif action == "run_command":
+            cmd = target or details
+            lines += [
+                f"Step {sid}:",
+                "Run this command EXACTLY:",
+                "",
+                cmd,
+                "",
+            ]
 
-            elif action == "run_command":
-                cmd = target or details
-                lines.append(f"Step {sid}: Run command in {ws}:")
-                lines.append(f"  $ {cmd}")
-                if desc:
-                    lines.append(f"  ({desc})")
+        else:
+            # research / unknown — include as informational, no action required
+            desc = step.get("description", "")
+            lines += [
+                f"Step {sid}: [informational — {action}]",
+                desc,
+                "",
+            ]
 
-            elif action == "research":
-                lines.append(f"Step {sid}: Research — {desc}")
-                if details:
-                    lines.append(f"  Focus: {details}")
+    # ── Mode-specific constraints ─────────────────────────────────────────────
+    if mode == _MODE_FILE:
+        lines += [
+            "CONSTRAINT: You MUST write ONLY the files listed above.",
+            "CONSTRAINT: Do NOT write any other files.",
+            "CONSTRAINT: Do NOT generate any additional structure.",
+            "",
+        ]
+    else:  # COMMAND_EXECUTION
+        lines += [
+            "CONSTRAINT: You MUST NOT write any files.",
+            "CONSTRAINT: You are ONLY allowed to run the specified commands.",
+            "",
+        ]
 
-            else:
-                lines.append(f"Step {sid}: [{action}] {desc}")
-                if target:
-                    lines.append(f"  Target: {target}")
-                if details:
-                    lines.append(f"  Details: {details}")
-
-            lines.append("")
-
-    # ── Constraints ───────────────────────────────────────────────────────────
+    # ── Hard stop ─────────────────────────────────────────────────────────────
     lines += [
-        "Constraints:",
-        f"  - All files must be written inside {ws}",
-        "  - Do not start any persistent server process",
-        "  - Do not explore the workspace or read memory files before acting",
-        "  - Begin with the Write tool on step 1 right now",
+        "After completing all steps, STOP.",
+        "Do NOT perform any additional actions.",
     ]
 
     return "\n".join(lines)
@@ -384,48 +413,6 @@ async def _run_agent(
 
 
 # ---------------------------------------------------------------------------
-# Direct file writer (for steps with explicit content)
-# ---------------------------------------------------------------------------
-
-def _write_file_step(
-    step: dict[str, Any],
-    workspace_dir: Path,
-    task_id: str,
-) -> tuple[str, str, str | None]:
-    """
-    Write a create_file / modify_file / document step directly to disk.
-
-    This bypasses the Claude Code agent entirely — the plan content is
-    written verbatim, so the agent's training priors cannot override it.
-
-    Returns:
-        (relative_path, status, error_message | None)
-    """
-    target  = step.get("target", "").strip()
-    details = step.get("details", "").strip()
-
-    if not target:
-        return ("", "skipped", "step has no target path")
-
-    abs_path = workspace_dir / target
-    _validate_path_in_workspace(abs_path, workspace_dir)
-
-    try:
-        abs_path.parent.mkdir(parents=True, exist_ok=True)
-        abs_path.write_text(details, encoding="utf-8")
-        executor_log.info(
-            "[%s] Wrote file: %s (%d bytes)",
-            task_id, target, len(details),
-        )
-        return (target, "written", None)
-    except Exception as exc:
-        executor_log.error(
-            "[%s] Failed to write file %s: %s", task_id, target, exc
-        )
-        return (target, "failed", str(exc))
-
-
-# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -435,20 +422,26 @@ def execute_task(
     workspace_info: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    Execute the full plan for a task.
+    Execute the full plan for a task in STRICT COMPLIANCE mode.
 
-    HYBRID EXECUTION STRATEGY
-    ─────────────────────────
-    File steps (create_file, modify_file, document):
-      Written directly to disk from the plan's ``details`` content.
-      This is deterministic — the exact planned content is always written,
-      bypassing any risk of the agent substituting its own interpretation.
+    STRICT COMPLIANCE EXECUTION
+    ───────────────────────────
+    All file operations and commands are performed exclusively by the Claude
+    Code agent.  No Python fallback writes files.
 
-    Command steps (run_command):
-      Executed via the Claude Code SDK agent so the agent can observe
-      command output, handle errors, and adapt as needed.
+    Execution mode is determined by plan content:
 
-    If no run_command steps exist, the agent is not invoked at all.
+      FILE_EXECUTION    — plan contains create_file / modify_file / document steps.
+                          Agent is given Write + Edit + Read tools only.
+                          Bash is excluded so the agent cannot run shell commands
+                          to create directories or install packages.
+
+      COMMAND_EXECUTION — plan contains only run_command steps.
+                          Agent is given Bash + Read tools only.
+                          Write / Edit are excluded so the agent cannot create files.
+
+    The system_prompt enforces deterministic behavior: no scaffolding, no
+    pattern reuse, no files beyond those listed, hard stop after all steps.
 
     Args:
         task:           Task packet (must contain task_id).
@@ -479,13 +472,17 @@ def execute_task(
             f"Run provision_workspace() before execute_task()."
         )
 
+    # ── Determine execution mode ──────────────────────────────────────────────
+    steps = plan.get("steps", [])
+    mode  = _detect_mode(steps)
+
     log_execution_event(
         task_id, "EXECUTOR START",
-        f"workspace={workspace_dir}  branch={branch_name!r}  project={project_id}",
+        f"workspace={workspace_dir}  branch={branch_name!r}  project={project_id}  mode={mode}",
     )
     executor_log.info(
-        "[%s] Executing task (hybrid) | project=%s branch=%s workspace=%s",
-        task_id, project_id, branch_name, workspace_dir,
+        "[%s] Executing task (strict compliance) | mode=%s project=%s branch=%s workspace=%s",
+        task_id, mode, project_id, branch_name, workspace_dir,
     )
 
     # ── Preflight checks ──────────────────────────────────────────────────────
@@ -497,84 +494,42 @@ def execute_task(
     if not ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY is not set in your .env file")
 
-    steps = plan.get("steps", [])
-    issues:         list[str] = []
-    steps_completed: list[dict[str, Any]] = []
-    files_written:   list[str] = []   # directly written (not via agent)
-
-    # ── Phase 1: Write all file steps directly ────────────────────────────────
-    FILE_ACTIONS = {"create_file", "modify_file", "document"}
-    file_steps    = [s for s in steps if (s.get("action_type") or s.get("type", "")) in FILE_ACTIONS]
-    command_steps = [s for s in steps if (s.get("action_type") or s.get("type", "")) == "run_command"]
+    # ── Select allowed tools by mode ──────────────────────────────────────────
+    # FILE_EXECUTION:    Write + Edit (file ops only).  Read is included because
+    #                    Edit requires a prior Read on existing files.
+    #                    Bash excluded — no shell access to bootstrap structure.
+    # COMMAND_EXECUTION: Bash + Read (run commands, observe output).
+    #                    Write / Edit excluded — no file creation.
+    if mode == _MODE_FILE:
+        allowed_tools = ["Write", "Edit", "Read"]
+    else:
+        allowed_tools = ["Bash", "Read"]
 
     executor_log.info(
-        "[%s] Plan split: %d file step(s), %d command step(s)",
-        task_id, len(file_steps), len(command_steps),
+        "[%s] Mode=%s | allowed_tools=%s | steps=%d",
+        task_id, mode, allowed_tools, len(steps),
     )
 
-    for step in file_steps:
-        sid = step.get("step_id", "?")
-        target, status, err = _write_file_step(step, workspace_dir, task_id)
-        if status == "written":
-            files_written.append(target)
-            steps_completed.append(
-                make_step_result(step_id=sid, status="completed",
-                                 output=f"Wrote {target}")
-            )
-        elif status == "skipped":
-            executor_log.warning("[%s] Skipped step %s: %s", task_id, sid, err)
-            steps_completed.append(
-                make_step_result(step_id=sid, status="skipped", output=err or "")
-            )
-        else:  # failed
-            issues.append(f"Step {sid}: failed to write {target}: {err}")
-            steps_completed.append(
-                make_step_result(step_id=sid, status="failed", output=err or "")
-            )
+    # ── Build strict-compliance prompt ────────────────────────────────────────
+    prompt = build_executor_prompt(task, plan, workspace_dir)
+    executor_log.info(
+        "[%s] Built executor prompt | chars=%d", task_id, len(prompt)
+    )
 
-    # ── Phase 2: Run command steps via Claude Code agent ─────────────────────
-    num_turns         = 0
-    agent_result_text = ""
-    had_agent_error   = False
+    # ── Run agent ─────────────────────────────────────────────────────────────
+    all_messages, result_msg, had_error = asyncio.run(
+        _run_agent(prompt, workspace_dir, task_id, allowed_tools)
+    )
 
-    if command_steps:
-        # Build a focused agent prompt — file writes are already done.
-        cmd_prompt = build_executor_prompt(task, {**plan, "steps": command_steps}, workspace_dir)
-        allowed_tools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
+    num_turns         = result_msg.num_turns if result_msg else 0
+    agent_result_text = (result_msg.result or "") if result_msg else ""
 
-        executor_log.info(
-            "[%s] Launching Claude Code agent for %d command step(s)",
-            task_id, len(command_steps),
-        )
+    executor_log.info(
+        "[%s] Agent complete | turns=%d had_error=%s",
+        task_id, num_turns, had_error,
+    )
 
-        all_messages, result_msg, had_agent_error = asyncio.run(
-            _run_agent(cmd_prompt, workspace_dir, task_id, allowed_tools)
-        )
-        num_turns         = result_msg.num_turns if result_msg else 0
-        agent_result_text = (result_msg.result or "") if result_msg else ""
-
-        executor_log.info(
-            "[%s] Agent complete | turns=%d had_error=%s",
-            task_id, num_turns, had_agent_error,
-        )
-
-        if had_agent_error:
-            issues.append(f"Agent reported error: {agent_result_text[:200]}")
-
-        # Add a synthetic step entry for the agent's work
-        step_status = "failed" if had_agent_error else "completed"
-        for step in command_steps:
-            sid = step.get("step_id", "?")
-            steps_completed.append(
-                make_step_result(
-                    step_id=sid, status=step_status,
-                    output=agent_result_text[:300] if agent_result_text else f"Agent ran {num_turns} turns.",
-                )
-            )
-    else:
-        executor_log.info("[%s] No command steps — skipping agent invocation", task_id)
-
-    # ── Discover all workspace changes (file writes + agent commands) ──────────
+    # ── Discover workspace changes ────────────────────────────────────────────
     files_created, files_modified = _discover_workspace_changes(workspace_dir)
 
     executor_log.info(
@@ -586,18 +541,21 @@ def execute_task(
     for f in files_modified:
         executor_log.info("[%s]   ~ %s", task_id, f)
 
-    # ── Stage and commit all changes to the project repo worktree ─────────────
+    # ── Stage and commit ──────────────────────────────────────────────────────
+    issues: list[str] = []
+    if had_error:
+        issues.append(f"Agent reported error: {agent_result_text[:200]}")
+
     commit_msg = (
         f"[{task_id}] {task.get('title', 'Task execution')}\n\n"
-        f"Hybrid execution: {len(files_written)} file(s) written directly, "
-        f"{num_turns} agent turn(s).\n"
+        f"Strict compliance execution ({mode}): {num_turns} agent turn(s).\n"
         f"Files created:  {', '.join(files_created)  or 'none'}\n"
         f"Files modified: {', '.join(files_modified) or 'none'}"
     )
 
     _run_git(["add", "."], cwd=workspace_dir)
     rc, _, _ = _run_git(["diff", "--cached", "--quiet"], cwd=workspace_dir)
-    if rc != 0:  # staged changes present
+    if rc != 0:
         _run_git(["commit", "-m", commit_msg], cwd=workspace_dir)
         executor_log.info(
             "[%s] Committed to project repo on branch %s in %s",
@@ -606,9 +564,19 @@ def execute_task(
     else:
         executor_log.info("[%s] No staged changes to commit", task_id)
 
-    # ── Build and persist result packet ──────────────────────────────────────
+    # ── Build result packet ───────────────────────────────────────────────────
+    step_status = "failed" if had_error else "completed"
+    steps_completed = [
+        make_step_result(
+            step_id=s.get("step_id", i + 1),
+            status=step_status,
+            output=agent_result_text[:300] if agent_result_text else f"Agent ran {num_turns} turns.",
+        )
+        for i, s in enumerate(steps)
+    ]
+
     summary = (
-        f"Wrote {len(files_written)} file(s) directly. "
+        f"Strict compliance ({mode}). "
         f"Agent ran {num_turns} turn(s). "
         f"Workspace: {len(files_created)} created, {len(files_modified)} modified."
         + (f" Issues: {len(issues)}." if issues else "")
