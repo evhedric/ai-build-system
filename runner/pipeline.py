@@ -28,6 +28,8 @@ from runner.roles.reviewer import run_reviewer
 from runner.github_ops import handle_post_approval
 from runner.plan_validator import PlanValidationError
 from runner.plan_regenerator import build_revision_feedback, should_fail_for_repeated_invalid_pattern
+from runner.projects.project_registry import resolve_project_from_task
+from runner.workspace.provisioner import provision_workspace
 
 
 def process_task(task: dict) -> dict:
@@ -50,6 +52,36 @@ def process_task(task: dict) -> dict:
         # ---------------------------------------------------------------
         task = transition_task(task_id, "planning")
         task = run_architect(task)
+
+        # ---------------------------------------------------------------
+        # Stage 1.5: Project resolution + workspace provisioning
+        #
+        # resolve_project_from_task() looks up "project_id" (Gold v3) or
+        # the legacy "project" field in the task packet.  Raises ValueError
+        # immediately if neither is present — no silent defaults.
+        #
+        # provision_workspace() creates an isolated git worktree for this
+        # task inside the project's workspace_root.  The returned descriptor
+        # is threaded through to the executor so all writes land in the
+        # correct directory and on the correct branch.
+        # ---------------------------------------------------------------
+        project      = resolve_project_from_task(task)
+        workspace_info = provision_workspace(task, project)
+
+        runner_log.info(
+            "[%s] Workspace provisioned | project=%s workspace=%s branch=%s",
+            task_id,
+            workspace_info["project_id"],
+            workspace_info["workspace_dir"],
+            workspace_info["branch_name"],
+        )
+        log_execution_event(
+            task_id,
+            "WORKSPACE READY",
+            f"project={workspace_info['project_id']}  "
+            f"branch={workspace_info['branch_name']}  "
+            f"dir={workspace_info['workspace_dir']}",
+        )
 
         # ---------------------------------------------------------------
         # Stage 2: Plan generation with pre-execution validation retry
@@ -93,7 +125,7 @@ def process_task(task: dict) -> dict:
             task = transition_task(task_id, "executing")
             task = load_task(task_id)
 
-            execution_result = run_executor(task, plan)
+            execution_result = run_executor(task, plan, workspace_info)
 
             # --- Review -------------------------------------------------
             task = transition_task(task_id, "in_review")

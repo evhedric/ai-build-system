@@ -205,12 +205,16 @@ def resolve_project_from_task(task: dict[str, Any]) -> dict[str, Any]:
         ValueError: If "project_id" is absent from the task.
         KeyError:   If the project_id is present but not registered.
     """
-    project_id = task.get("project_id")
+    # Accept either "project_id" (Gold v3 canonical) or "project" (legacy
+    # field name used by runner.schemas.make_task_packet).  Both are treated
+    # identically; the Gold v3 name takes precedence when both are present.
+    project_id = task.get("project_id") or task.get("project")
 
     if not project_id:
         raise ValueError(
-            "Task is missing 'project_id'. Every task must explicitly name its "
-            "target project. Fail-closed: no default project is assumed."
+            "Task is missing 'project_id' (or legacy 'project'). "
+            "Every task must explicitly name its target project. "
+            "Fail-closed: no default project is assumed."
         )
 
     return get_project(project_id)
