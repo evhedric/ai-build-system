@@ -140,87 +140,107 @@ def _discover_workspace_changes(workspace_dir: Path) -> tuple[list[str], list[st
 # Executor prompt builder
 # ---------------------------------------------------------------------------
 
+_EXECUTOR_SYSTEM_PROMPT = """\
+You are an autonomous code executor embedded in an AI build pipeline.
+
+Your ONLY job is to immediately create files and run commands as instructed in each task.
+
+Rules (non-negotiable):
+- Use the Write tool to create the first file BEFORE doing anything else.
+- Do NOT read memory files, project history, or other task workspaces.
+- Do NOT explore the filesystem before acting.
+- Do NOT ask questions or wait for confirmation.
+- Execute every step in the order given, then stop.
+- All file paths are absolute. Write files exactly where specified.
+- Never start a persistent server (http.listen / npm start / npm run dev).
+- When finished, output a short summary of every file created and every command run.
+"""
+
+
 def build_executor_prompt(
     task: dict[str, Any],
     plan: dict[str, Any],
     workspace_dir: Path,
 ) -> str:
     """
-    Build the single prompt that the Claude Code agent receives.
+    Build the imperative query prompt sent to the Claude Code agent.
 
-    Encodes:
-      - Workspace boundary rule (ONLY operate inside workspace_dir)
-      - Full task context: title, request, goals, constraints, success criteria
-      - All plan steps with action types, targets, and details
-      - Execution instructions (run to completion, verify, no persistent servers)
+    Design rules:
+    - Opens with an action verb ("Create" / "Write") on the very first line so
+      the agent's natural first response is a Write tool call, not exploration.
+    - Every file step is expressed as an absolute path + what to put in it.
+    - Every command step is expressed as: run <cmd> in <workspace_dir>.
+    - Ends with a single anti-exploration reminder, not an extended preamble.
+
+    The system_prompt (_EXECUTOR_SYSTEM_PROMPT) handles role/behavior locking.
+    This query prompt carries only the concrete task instructions.
     """
+    ws = str(workspace_dir)
+    steps = plan.get("steps", [])
+
     lines: list[str] = []
 
-    # ── Header + workspace boundary ───────────────────────────────────────────
+    # ── Opening action line ───────────────────────────────────────────────────
+    # Must start with a verb so the model's first natural act is tool use.
     lines += [
-        "You are an autonomous executor for an AI build system.",
+        f"Create and write the required project files in this workspace: {ws}",
         "",
-        f"WORKSPACE DIRECTORY: {workspace_dir}",
-        "RULE: You MUST operate ONLY inside this directory.",
-        "      Never read, write, or execute anything outside it.",
+        f"Task: {task.get('title', task.get('request', ''))}",
+        f"Goal: {task.get('request', '')}",
         "",
     ]
 
-    # ── Task context ──────────────────────────────────────────────────────────
-    lines += [
-        f"TASK: {task.get('title', task.get('request', ''))}",
-        "",
-        f"REQUEST: {task.get('request', '')}",
-        "",
-    ]
-
-    goals = task.get("goals", [])
-    if goals:
-        lines.append("GOALS:")
-        lines += [f"  - {g}" for g in goals]
+    if task.get("success_criteria"):
+        lines.append("Success criteria:")
+        lines += [f"  - {c}" for c in task["success_criteria"]]
         lines.append("")
 
-    constraints = task.get("constraints", [])
-    if constraints:
-        lines.append("CONSTRAINTS:")
-        lines += [f"  - {c}" for c in constraints]
-        lines.append("")
-
-    criteria = task.get("success_criteria", [])
-    if criteria:
-        lines.append("SUCCESS CRITERIA:")
-        lines += [f"  - {c}" for c in criteria]
-        lines.append("")
-
-    # ── Execution plan ────────────────────────────────────────────────────────
-    steps = plan.get("steps", [])
+    # ── Steps as direct imperatives ───────────────────────────────────────────
     if steps:
-        lines.append("EXECUTION PLAN — complete every step in order:")
+        lines.append("Execute these steps in order — start with step 1 immediately:")
         lines.append("")
         for step in steps:
-            sid     = step.get("step_id", "?")
-            action  = step.get("action_type", step.get("type", "?"))
-            desc    = step.get("description", "")
-            target  = step.get("target", "")
+            sid    = step.get("step_id", "?")
+            action = step.get("action_type", step.get("type", ""))
+            desc   = step.get("description", "")
+            target = step.get("target", "")
             details = step.get("details", "")
-            lines.append(f"Step {sid}: [{action}] {desc}")
-            if target:
-                lines.append(f"  Target:  {target}")
-            if details:
-                lines.append(f"  Details: {details}")
+
+            if action in ("create_file", "modify_file", "document"):
+                abs_target = f"{ws}\\{target}" if target else ws
+                lines.append(f"Step {sid}: Write file `{abs_target}`")
+                lines.append(f"  Purpose: {desc}")
+                if details:
+                    lines.append(f"  Content guidance: {details}")
+
+            elif action == "run_command":
+                cmd = target or details
+                lines.append(f"Step {sid}: Run command in {ws}:")
+                lines.append(f"  $ {cmd}")
+                if desc:
+                    lines.append(f"  ({desc})")
+
+            elif action == "research":
+                lines.append(f"Step {sid}: Research — {desc}")
+                if details:
+                    lines.append(f"  Focus: {details}")
+
+            else:
+                lines.append(f"Step {sid}: [{action}] {desc}")
+                if target:
+                    lines.append(f"  Target: {target}")
+                if details:
+                    lines.append(f"  Details: {details}")
+
             lines.append("")
 
-    # ── Execution instructions ────────────────────────────────────────────────
+    # ── Constraints ───────────────────────────────────────────────────────────
     lines += [
-        "INSTRUCTIONS:",
-        "1. Execute every step above to completion.",
-        f"2. Write all files inside {workspace_dir} only.",
-        f"3. Run all shell commands with cwd={workspace_dir}",
-        "4. If a step fails, diagnose and fix before moving on.",
-        "5. Do NOT start any persistent server (http.listen, npm start, npm run dev).",
-        "   One-shot scripts that exit on their own (console.log, data processing) are fine.",
-        "6. After writing each file, verify it exists and has the correct content.",
-        "7. When all steps are complete, output a brief summary of what was accomplished.",
+        "Constraints:",
+        f"  - All files must be written inside {ws}",
+        "  - Do not start any persistent server process",
+        "  - Do not explore the workspace or read memory files before acting",
+        "  - Begin with the Write tool on step 1 right now",
     ]
 
     return "\n".join(lines)
@@ -282,6 +302,7 @@ async def _run_agent(
         cwd=workspace_dir,
         max_turns=30,
         permission_mode="acceptEdits",
+        system_prompt=_EXECUTOR_SYSTEM_PROMPT,
     )
 
     all_messages: list[Any] = []
