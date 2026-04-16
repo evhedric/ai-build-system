@@ -219,6 +219,57 @@ def _execute_step(
         return make_step_result(step_id, "failed", error=str(e))
 
 
+_NEXTJS_GITIGNORE = """\
+# Dependencies
+node_modules/
+
+# Next.js build output
+/.next/
+/out/
+
+# Production
+/build
+
+# Environment variables
+.env*.local
+.env
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+"""
+
+
+def _ensure_workspace_git_repo(task_id: str) -> None:
+    """
+    After plan steps complete, ensure the workspace is a standalone git repo.
+    - Runs `git init` if no .git directory exists yet.
+    - Creates a standard Next.js .gitignore if one is absent.
+    The workspace repo is entirely separate from the AI builder repo.
+    """
+    git_dir = WORKSPACE_DIR / ".git"
+    if not git_dir.exists():
+        rc, out, err = _run_git(["init"], cwd=WORKSPACE_DIR)
+        if rc == 0:
+            executor_log.info("[%s] Workspace git repo initialized: %s", task_id, WORKSPACE_DIR)
+        else:
+            executor_log.warning("[%s] git init in workspace failed: %s", task_id, err)
+
+    gitignore_path = WORKSPACE_DIR / ".gitignore"
+    if not gitignore_path.exists():
+        gitignore_path.write_text(_NEXTJS_GITIGNORE, encoding="utf-8")
+        executor_log.info("[%s] Created workspace .gitignore", task_id)
+
+
 def run_executor(task: dict, plan: dict) -> dict:
     """
     Execute the full plan for a task.
@@ -259,6 +310,9 @@ def run_executor(task: dict, plan: dict) -> dict:
                 files_modified.append(target)
         elif result["status"] == "failed":
             issues.append(f"Step {step['step_id']}: {result.get('error', 'unknown error')}")
+
+    # Ensure the workspace is a standalone git repo for the built project
+    _ensure_workspace_git_repo(task_id)
 
     # Commit all staged changes
     completed_count = sum(1 for r in steps_results if r["status"] == "completed")

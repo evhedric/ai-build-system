@@ -41,9 +41,9 @@ SCHEMAS_DIR = BASE_DIR / "schemas"
 
 # --- Workspace Isolation ---
 # All build task subprocesses execute inside WORKSPACE_DIR, not the repo root.
-# This prevents build tools (npm, npx, node) from polluting the repository.
-WORKSPACES_DIR = BASE_DIR / "workspaces"
-WORKSPACE_DIR  = WORKSPACES_DIR / "perchiq"   # dedicated PerchIQ execution workspace
+# The workspace lives on local disk (outside OneDrive) so large build artifacts
+# (node_modules, .next) don't sync to the cloud and don't touch the AI builder repo.
+WORKSPACE_DIR = Path("C:/dev/workspaces/perchiq")
 
 # Ensure all directories exist at import time
 for _dir in [TASKS_DIR, PLANS_DIR, ARTIFACTS_DIR, REVIEWS_DIR, STATE_DIR, LOGS_DIR, PROMPTS_DIR, SCHEMAS_DIR, WORKSPACE_DIR]:
