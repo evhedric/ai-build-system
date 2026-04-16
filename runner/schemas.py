@@ -56,12 +56,14 @@ def make_task_packet(
     success_criteria: list[str] | None = None,
     tags: list[str] | None = None,
     priority: str = "medium",
+    project: str = "perchiq",
 ) -> dict[str, Any]:
     return {
         "task_id": task_id or new_task_id(),
         "created_at": _now(),
         "updated_at": _now(),
         "status": "pending",
+        "project": project,
         "request": request,
         "title": title or request[:80],
         "goals": goals or [],
