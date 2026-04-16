@@ -324,28 +324,39 @@ async def _run_agent(
     """
     Launch the Claude Code agent and collect all messages.
 
-    Uses SubprocessCLITransport directly (bypassing query()) so we can
-    silently skip message types that the SDK version doesn't know about
-    (e.g. 'rate_limit_event' added in CLI 2.1.111 but absent from SDK 0.0.25).
-    This makes the executor resilient to CLI/SDK version drift.
+    Uses SubprocessCLITransport in STREAMING MODE (--input-format stream-json)
+    so the user prompt is delivered via stdin as a JSON message rather than as
+    a CLI argument.
 
-    The agent runs with:
-      cwd             = workspace_dir   (path-containment safety)
-      permission_mode = "acceptEdits"   (auto-accept file writes)
-      system_prompt   = _EXECUTOR_SYSTEM_PROMPT  (behavioral locking)
-      max_turns       = 30              (generous for complex tasks)
+    WHY STREAMING MODE:
+      The previous implementation used --print mode, which passes the prompt as
+      a CLI argument: `claude --print -- <multiline_text>`.  On Windows,
+      subprocess argument handling truncates multi-line strings at the first
+      newline boundary, so the agent received only the opening line and nothing
+      else — it responded "I don't see any steps defined."
+
+      Streaming mode sends the prompt as:
+        {"type": "user", "message": {"role": "user", "content": "<full text>"},
+         "parent_tool_use_id": null, "session_id": "default"}
+      over stdin as a single JSON line.  JSON-encoding preserves embedded
+      newlines, completely bypassing the Windows CLI argument truncation bug.
+
+    NOTE: --system-prompt is still passed as a CLI argument (SDK constraint),
+    so _EXECUTOR_SYSTEM_PROMPT remains flattened to a single line.
+
+    Rate-limit and control protocol messages are skipped silently so the
+    executor is resilient to CLI/SDK version drift.
 
     Returns:
         (all_messages, result_message, had_error)
     """
-    # Message types emitted by the CLI that we silently skip rather than crash on.
-    # rate_limit_event was added in CLI 2.1.111; SDK 0.0.25 raises MessageParseError.
-    _SKIP_TYPES = frozenset({"rate_limit_event"})
+    # Message types to skip rather than crash on:
+    #   rate_limit_event    — added in CLI 2.1.111; not in SDK 0.0.25 type list
+    #   control_request     — SDK control protocol, not an agent message
+    #   control_response    — response to our init handshake, not an agent message
+    _SKIP_TYPES = frozenset({"rate_limit_event", "control_request", "control_response"})
 
-    # The CLI's --system-prompt flag does not accept multiline strings when
-    # using --print mode on Windows (newlines break argument parsing).
-    # Collapse all newlines + blank lines to single spaces so the prompt
-    # fits on one logical line while preserving the full rule set.
+    # --system-prompt is still a CLI arg — must remain a single line on Windows.
     _system_prompt_flat = " ".join(
         line.strip() for line in _EXECUTOR_SYSTEM_PROMPT.splitlines() if line.strip()
     )
@@ -359,7 +370,14 @@ async def _run_agent(
         system_prompt=_system_prompt_flat,
     )
 
-    transport = SubprocessCLITransport(prompt=prompt, options=options)
+    # An empty async generator triggers streaming mode in SubprocessCLITransport
+    # (_is_streaming = not isinstance(prompt, str)).  The actual prompt is sent
+    # below via transport.write() after connect(), not via CLI argument.
+    async def _empty_stream():
+        return
+        yield  # makes this an async generator (never reached)
+
+    transport = SubprocessCLITransport(prompt=_empty_stream(), options=options)
 
     all_messages: list[Any] = []
     result_msg:   ResultMessage | None = None
@@ -368,10 +386,32 @@ async def _run_agent(
     try:
         await transport.connect()
 
+        # ── Streaming mode stdin protocol ─────────────────────────────────────
+        # 1. Initialize the control protocol so the CLI is ready to process
+        #    user messages.  The response comes back as a control_response which
+        #    we skip in the read loop below.
+        await transport.write(json.dumps({
+            "type": "control_request",
+            "request_id": "req_init_0",
+            "request": {"subtype": "initialize", "hooks": None},
+        }) + "\n")
+
+        # 2. Send the user prompt as a JSON-encoded message over stdin.
+        #    JSON encoding preserves all newlines without Windows truncation.
+        await transport.write(json.dumps({
+            "type": "user",
+            "message": {"role": "user", "content": prompt},
+            "parent_tool_use_id": None,
+            "session_id": "default",
+        }) + "\n")
+
+        # 3. Close stdin — signals to the CLI that no more input is coming.
+        await transport.end_input()
+
+        # ── Read response messages ────────────────────────────────────────────
         async for raw_data in transport.read_messages():
             msg_type = raw_data.get("type", "")
 
-            # Skip known-but-unhandled message types (e.g. rate_limit_event)
             if msg_type in _SKIP_TYPES:
                 executor_log.debug(
                     "[%s] Skipping CLI message type '%s'", task_id, msg_type
