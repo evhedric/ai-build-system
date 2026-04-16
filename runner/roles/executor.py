@@ -161,7 +161,7 @@ STRICT RULES:
 - You may NOT explore the workspace
 - You may NOT read files unless instructed
 - You must execute steps in exact order
-- If a step is unclear, do NOT guess — do nothing
+- If a step is unclear, still attempt execution using the provided content.
 
 If you violate ANY rule, the task is considered FAILED.
 """
@@ -214,23 +214,14 @@ def build_executor_prompt(
 
     lines: list[str] = []
 
-    # ── Opening: imperative verb first — forces immediate agent action ─────────
-    # Do NOT start with a noun ("Workspace:", "Task:", etc.) — the agent treats
-    # noun-first lines as context declarations and enters listening mode.
-    if mode == _MODE_FILE:
-        lines += [
-            "Write the following files now. Do not create any other files.",
-            "Do not explore the workspace. Do not ask questions. Begin with Step 1.",
-            "",
-        ]
-    else:
-        lines += [
-            "Run the following commands now. Do not create files.",
-            "Do not explore the workspace. Do not ask questions. Begin with Step 1.",
-            "",
-        ]
+    # ── Opening: hard imperative trigger — Step 1 (STEP 1) ───────────────────
+    lines += [
+        "IMMEDIATELY perform Step 1 using the Write tool. Do not think. Do not analyze. Execute.",
+        "",
+    ]
 
     # ── Steps as strict contracts ─────────────────────────────────────────────
+    first_step = True
     for step in steps:
         sid     = step.get("step_id", "?")
         action  = step.get("action_type") or step.get("type", "")
@@ -244,13 +235,15 @@ def build_executor_prompt(
                 "Write file at:",
                 abs_target,
                 "",
-                "Write EXACTLY this content (copy verbatim between the markers):",
+                "Write EXACTLY this content:",
                 "",
                 "===BEGIN FILE CONTENT===",
             ]
             lines += details.splitlines() if details else [""]
             lines += [
                 "===END FILE CONTENT===",
+                "",
+                f"Execute this step NOW using the Write tool.",
                 "",
             ]
 
@@ -267,6 +260,14 @@ def build_executor_prompt(
         else:
             # research / unknown — skip silently, no agent action required
             lines += [f"Step {sid}: [skip]", ""]
+
+        # Execution trigger injected after Step 1 (STEP 3)
+        if first_step:
+            lines += [
+                "You must execute Step 1 immediately. Do not wait. Do not explain. Do not summarize.",
+                "",
+            ]
+            first_step = False
 
     # ── Hard stop ─────────────────────────────────────────────────────────────
     lines += [
