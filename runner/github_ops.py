@@ -1,80 +1,270 @@
 """
 GitHub integration for the AI orchestration system.
 
+Gold v3 — target-project-bound git operations.
+
+All git and gh CLI commands run inside the task workspace (a git worktree of
+the TARGET project repo).  The orchestrator's own repository is never touched.
+
 Handles:
-  - Branch pushes
-  - Pull request creation (if AUTO_CREATE_PR=true)
+  - Safety commit of any uncommitted workspace changes (edge-case net)
+  - Branch push to the project's origin remote
+  - Pull request creation against the project's default_branch
   - PR URL tracking on the task packet
+
+Safety guard:
+  repo_path (and workspace_dir) must never resolve to the orchestrator repo
+  root or any subdirectory of it.  Violations raise RuntimeError immediately —
+  no git commands are executed.
 """
 
 import subprocess
 from pathlib import Path
+from typing import Any
 
-from runner.config import BASE_DIR, GITHUB_REPO, GITHUB_TOKEN, AUTO_CREATE_PR
+from runner.config import AUTO_CREATE_PR
 from runner.logger import github_log, log_execution_event
 from runner.schemas import save_task
 
+# ---------------------------------------------------------------------------
+# Orchestrator identity — the one repo we must NEVER commit to
+# ---------------------------------------------------------------------------
 
-def _run(args: list[str], cwd: Path = BASE_DIR) -> tuple[int, str, str]:
+# runner/ -> ai-build-system/  (two levels up from this file)
+_ORCHESTRATOR_ROOT: Path = Path(__file__).parent.parent.resolve()
+
+
+# ---------------------------------------------------------------------------
+# Low-level subprocess helper
+# ---------------------------------------------------------------------------
+
+def _run(args: list[str], cwd: Path) -> tuple[int, str, str]:
+    """
+    Run *args* as a subprocess in *cwd*.
+    cwd is REQUIRED — there is intentionally no default to prevent accidental
+    execution in the wrong directory.
+    Returns (returncode, stdout, stderr).
+    """
     result = subprocess.run(
-        args, cwd=str(cwd), capture_output=True, text=True
+        args,
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
     )
     return result.returncode, result.stdout.strip(), result.stderr.strip()
 
 
-def push_branch(branch_name: str, task_id: str) -> bool:
-    """Push the task branch to origin. Returns True on success."""
-    github_log.info("[%s] Pushing branch: %s", task_id, branch_name)
-    rc, out, err = _run(["git", "push", "-u", "origin", branch_name])
-    if rc != 0:
-        github_log.error("[%s] Push failed: %s", task_id, err)
+# ---------------------------------------------------------------------------
+# Safety validators
+# ---------------------------------------------------------------------------
+
+def _validate_not_orchestrator(path: Path, label: str, task_id: str) -> None:
+    """
+    Raise RuntimeError if *path* resolves to the orchestrator repo root or
+    any path inside it.
+
+    Args:
+        path:    The path to check (workspace_dir or repo_path).
+        label:   Human-readable name for the path ("workspace_dir", "repo_path").
+        task_id: For log / error messages.
+
+    Raises:
+        RuntimeError: If *path* is the orchestrator root or a subdirectory of it.
+    """
+    resolved = path.resolve()
+
+    if resolved == _ORCHESTRATOR_ROOT:
+        raise RuntimeError(
+            f"[{task_id}] SAFETY VIOLATION: {label} resolves to the orchestrator "
+            f"repository root ({resolved}). git operations on the orchestrator repo "
+            f"are forbidden. Verify that workspace_info contains the TARGET project "
+            f"repo path, not the AI builder repo."
+        )
+
+    try:
+        resolved.relative_to(_ORCHESTRATOR_ROOT)
+        # If we reach here without ValueError, *resolved* is inside the orchestrator tree.
+        raise RuntimeError(
+            f"[{task_id}] SAFETY VIOLATION: {label} ({resolved}) is a subdirectory "
+            f"of the orchestrator repository ({_ORCHESTRATOR_ROOT}). "
+            f"All git operations must target an external project repo."
+        )
+    except ValueError:
+        pass  # resolved is outside the orchestrator tree — this is the expected path
+
+
+# ---------------------------------------------------------------------------
+# Registry helper
+# ---------------------------------------------------------------------------
+
+def _get_default_branch(project_id: str) -> str:
+    """
+    Look up the project's default_branch from the project registry.
+    Falls back to 'main' if the lookup fails (non-fatal — push already
+    succeeded at this point, so a fallback is acceptable).
+    """
+    try:
+        from runner.projects.project_registry import get_project
+        project = get_project(project_id)
+        return project.get("default_branch", "main")
+    except Exception as exc:
+        github_log.warning(
+            "Could not resolve default_branch for project %r: %s — falling back to 'main'",
+            project_id, exc,
+        )
+        return "main"
+
+
+# ---------------------------------------------------------------------------
+# Git operations — all cwd-scoped to the project workspace
+# ---------------------------------------------------------------------------
+
+def commit_workspace_changes(
+    workspace_dir: Path,
+    task_id: str,
+    branch_name: str,
+) -> bool:
+    """
+    Stage and commit any uncommitted changes remaining in *workspace_dir*.
+
+    The executor already stages + commits after each file write.  This is a
+    safety net for files produced by run_command steps that the executor did
+    not explicitly stage (e.g. generated by npm build, test output, etc.).
+
+    Args:
+        workspace_dir: Path to the task git worktree.
+        task_id:       For log messages.
+        branch_name:   Included in the commit message for traceability.
+
+    Returns:
+        True if a new commit was created, False if the workspace was already clean.
+    """
+    rc, status_out, _ = _run(["git", "status", "--porcelain"], cwd=workspace_dir)
+    if rc != 0 or not status_out.strip():
+        github_log.info("[%s] Workspace is clean — no safety commit needed", task_id)
         return False
-    github_log.info("[%s] Branch pushed successfully", task_id)
+
+    github_log.info(
+        "[%s] Uncommitted changes detected in workspace — staging all files", task_id
+    )
+    _run(["git", "add", "."], cwd=workspace_dir)
+
+    commit_msg = (
+        f"[{task_id}] implementation\n\n"
+        f"Safety commit: staged uncommitted changes after executor completed.\n"
+        f"Branch: {branch_name}"
+    )
+    rc, _, err = _run(["git", "commit", "-m", commit_msg], cwd=workspace_dir)
+    if rc != 0:
+        github_log.error("[%s] Safety commit failed (exit %d): %s", task_id, rc, err)
+        return False
+
+    github_log.info(
+        "[%s] Safety commit created on branch %r in %s", task_id, branch_name, workspace_dir
+    )
+    return True
+
+
+def push_branch(
+    workspace_dir: Path,
+    branch_name: str,
+    task_id: str,
+) -> bool:
+    """
+    Push *branch_name* to origin from the project worktree at *workspace_dir*.
+
+    Because *workspace_dir* is a git worktree of the TARGET project repo,
+    'origin' here is the project's remote — not the orchestrator remote.
+
+    Args:
+        workspace_dir: Absolute path to the task git worktree.
+        branch_name:   Branch to push (e.g. "feat/task-task-XYZ123").
+        task_id:       For log messages.
+
+    Returns:
+        True on success, False on push failure (non-fatal — pipeline continues).
+    """
+    github_log.info(
+        "[%s] Pushing branch %r to origin (cwd=%s)", task_id, branch_name, workspace_dir
+    )
+    rc, _, err = _run(
+        ["git", "push", "-u", "origin", branch_name],
+        cwd=workspace_dir,
+    )
+    if rc != 0:
+        github_log.error(
+            "[%s] git push failed (exit %d): %s", task_id, rc, err
+        )
+        return False
+
+    github_log.info("[%s] Branch %r pushed successfully", task_id, branch_name)
     log_execution_event(task_id, "BRANCH PUSHED", branch_name)
     return True
 
 
-def create_pull_request(task: dict, review: dict) -> str | None:
+def create_pull_request(
+    workspace_dir: Path,
+    task: dict[str, Any],
+    review: dict[str, Any],
+    default_branch: str = "main",
+) -> str | None:
     """
-    Create a GitHub PR using the `gh` CLI tool.
-    Returns the PR URL if successful, None otherwise.
+    Create a GitHub PR using the `gh` CLI tool, executed from *workspace_dir*
+    so that `gh` operates on the TARGET project repo's remote.
 
-    Requires `gh` CLI to be authenticated (gh auth login).
+    The PR base is *default_branch* (the project's primary branch — typically
+    "main").  It is never set to the orchestrator's Claude-Workflow branch.
+
+    Args:
+        workspace_dir:  Path to the task git worktree (project repo).
+        task:           Task packet (must have task_id, branch_name).
+        review:         ReviewPacket from run_reviewer().
+        default_branch: Branch to merge into (from project registry).
+
+    Returns:
+        PR URL string on success, None on failure.
+
+    Requires:
+        `gh` CLI authenticated via `gh auth login`.
     """
-    task_id = task["task_id"]
+    task_id     = task["task_id"]
     branch_name = task.get("branch_name", "")
 
     if not branch_name:
-        github_log.warning("[%s] No branch name on task — cannot create PR", task_id)
+        github_log.warning("[%s] No branch_name on task — cannot create PR", task_id)
         return None
 
-    # Build PR title and body
     title = f"[{task_id}] {task.get('title', 'AI Task')}"
 
     criteria_met = "\n".join(f"- {c}" for c in review.get("criteria_met", []))
-    next_steps = "\n".join(f"- {s}" for s in review.get("next_steps", []))
+    next_steps   = "\n".join(f"- {s}" for s in review.get("next_steps", []))
 
     body = (
         f"## Task\n{task.get('request', '')}\n\n"
-        f"## Goals\n" + "\n".join(f"- {g}" for g in task.get("goals", [])) + "\n\n"
-        f"## Review Score: {review.get('score', '?')}/10\n"
-        f"{review.get('reasoning', '')}\n\n"
-        f"## Criteria Met\n{criteria_met or '_none_'}\n\n"
-        f"## Next Steps\n{next_steps or '_none_'}\n\n"
-        f"---\n_Generated by AI Orchestration System_"
+        f"## Goals\n"
+        + "\n".join(f"- {g}" for g in task.get("goals", []))
+        + f"\n\n## Review Score: {review.get('score', '?')}/10\n"
+        + f"{review.get('reasoning', '')}\n\n"
+        + f"## Criteria Met\n{criteria_met or '_none_'}\n\n"
+        + f"## Next Steps\n{next_steps or '_none_'}\n\n"
+        + f"---\n_Generated by AI Orchestration System (Gold v3)_"
     )
 
-    github_log.info("[%s] Creating PR: %s", task_id, title)
+    github_log.info(
+        "[%s] Creating PR: %r  (%s -> %s)  cwd=%s",
+        task_id, title, branch_name, default_branch, workspace_dir,
+    )
+
     rc, out, err = _run([
         "gh", "pr", "create",
         "--title", title,
-        "--body", body,
-        "--base", "Claude-Workflow",
-        "--head", branch_name,
-    ])
+        "--body",  body,
+        "--base",  default_branch,
+        "--head",  branch_name,
+    ], cwd=workspace_dir)
 
     if rc != 0:
-        github_log.error("[%s] PR creation failed: %s", task_id, err)
+        github_log.error("[%s] PR creation failed (exit %d): %s", task_id, rc, err)
         return None
 
     pr_url = out.strip()
@@ -83,28 +273,99 @@ def create_pull_request(task: dict, review: dict) -> str | None:
     return pr_url
 
 
-def handle_post_approval(task: dict, review: dict) -> dict:
-    """
-    After a task is approved:
-    1. Push the branch to origin
-    2. Optionally create a PR (if AUTO_CREATE_PR is enabled)
-    3. Update the task packet with PR URL
-    Returns the updated task dict.
-    """
-    task_id = task["task_id"]
-    branch_name = task.get("branch_name", "")
+# ---------------------------------------------------------------------------
+# Public entry point — called by pipeline.py after approval
+# ---------------------------------------------------------------------------
 
+def handle_post_approval(
+    task: dict[str, Any],
+    review: dict[str, Any],
+    workspace_info: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Execute the post-approval git flow against the TARGET project repo.
+
+    Steps (in order):
+      1. Extract and validate workspace paths from *workspace_info*.
+      2. Guard: abort if repo_path or workspace_dir is the orchestrator repo.
+      3. Safety-commit any uncommitted workspace changes.
+      4. Push the task branch to origin (project remote).
+      5. Optionally create a PR against the project's default_branch
+         (only if AUTO_CREATE_PR=true in config).
+      6. Record the PR URL on the task packet.
+
+    Args:
+        task:           Task packet — must contain task_id; branch_name is
+                        preferred from workspace_info but falls back to task.
+        review:         ReviewPacket from run_reviewer().
+        workspace_info: Descriptor from provision_workspace():
+                          {workspace_dir, branch_name, repo_path, project_id}
+
+    Returns:
+        Updated task dict (pr_url added if a PR was successfully created).
+
+    Raises:
+        RuntimeError: If repo_path or workspace_dir resolves to the orchestrator
+                      repository — git operations are blocked entirely.
+    """
+    task_id       = task["task_id"]
+    branch_name   = workspace_info.get("branch_name") or task.get("branch_name", "")
+    repo_path_str = workspace_info.get("repo_path", "")
+    ws_dir_str    = workspace_info.get("workspace_dir", "")
+    project_id    = workspace_info.get("project_id", "")
+
+    # ── Early-exit if workspace info is incomplete ────────────────────────────
     if not branch_name:
-        github_log.warning("[%s] No branch name — skipping GitHub operations", task_id)
+        github_log.warning(
+            "[%s] No branch_name in workspace_info — skipping git operations", task_id
+        )
         return task
 
-    # Push the branch
-    push_ok = push_branch(branch_name, task_id)
+    if not ws_dir_str:
+        github_log.warning(
+            "[%s] workspace_info missing workspace_dir — skipping git operations", task_id
+        )
+        return task
 
+    workspace_dir = Path(ws_dir_str)
+    repo_path     = Path(repo_path_str) if repo_path_str else workspace_dir
+
+    if not workspace_dir.exists():
+        github_log.warning(
+            "[%s] workspace_dir does not exist (%s) — skipping git operations",
+            task_id, workspace_dir,
+        )
+        return task
+
+    # ── Guard: block any operation on the orchestrator repo ───────────────────
+    _validate_not_orchestrator(repo_path,     "repo_path",     task_id)
+    _validate_not_orchestrator(workspace_dir, "workspace_dir", task_id)
+
+    github_log.info(
+        "[%s] Post-approval git flow | project=%s  branch=%s  workspace=%s",
+        task_id, project_id, branch_name, workspace_dir,
+    )
+    log_execution_event(
+        task_id, "POST-APPROVAL START",
+        f"project={project_id}  branch={branch_name}  workspace={workspace_dir}",
+    )
+
+    # ── 3. Safety commit ──────────────────────────────────────────────────────
+    commit_workspace_changes(workspace_dir, task_id, branch_name)
+
+    # ── 4. Push branch to project remote ─────────────────────────────────────
+    push_ok = push_branch(workspace_dir, branch_name, task_id)
+
+    # ── 5. Optionally create PR ───────────────────────────────────────────────
     if push_ok and AUTO_CREATE_PR:
-        pr_url = create_pull_request(task, review)
+        default_branch = _get_default_branch(project_id)
+        pr_url = create_pull_request(workspace_dir, task, review, default_branch)
         if pr_url:
             task["pr_url"] = pr_url
             save_task(task)
 
+    log_execution_event(
+        task_id, "POST-APPROVAL COMPLETE",
+        f"pushed={push_ok}  pr={'yes' if task.get('pr_url') else 'no'}",
+    )
     return task

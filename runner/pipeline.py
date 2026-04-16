@@ -139,7 +139,7 @@ def process_task(task: dict) -> dict:
                 # -------------------------------------------------------
                 task = transition_task(task_id, "approved")
                 task = load_task(task_id)
-                task = handle_post_approval(task, review)
+                task = handle_post_approval(task, review, workspace_info)
                 task = transition_task(task_id, "complete")
                 runner_log.info(
                     "[%s] TASK COMPLETE (score=%d/10)",
