@@ -214,7 +214,16 @@ def build_executor_prompt(
                 lines.append(f"Step {sid}: Write file `{abs_target}`")
                 lines.append(f"  Purpose: {desc}")
                 if details:
-                    lines.append(f"  Content guidance: {details}")
+                    # If the details field contains actual file content (code, text),
+                    # present it as the required content to write — not just "guidance".
+                    # This prevents the agent from substituting its own interpretation.
+                    lines.append(f"  Write EXACTLY this content to the file:")
+                    lines.append("  ```")
+                    for content_line in details.splitlines():
+                        lines.append(f"  {content_line}")
+                    lines.append("  ```")
+                else:
+                    lines.append(f"  (Implement the full required functionality for: {desc})")
 
             elif action == "run_command":
                 cmd = target or details
