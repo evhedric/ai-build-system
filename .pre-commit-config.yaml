@@ -1,0 +1,22 @@
+repos:
+  # Detect secrets before they get committed
+  # NOTE: detect-secrets v1.5.0 has Python 3.14 compat issues (TypeError in
+  # plugin init). Pinned to v1.4.0 and requires python_version < 3.14.
+  # Primary secret protection is provided by detect-private-key below.
+  # Re-enable detect-secrets when upstream fixes Python 3.14 support.
+  # - repo: https://github.com/Yelp/detect-secrets
+  #   rev: v1.4.0
+  #   hooks:
+  #     - id: detect-secrets
+  #       args: ['--baseline', '.secrets.baseline']
+
+  # General pre-commit hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      - id: detect-private-key
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
