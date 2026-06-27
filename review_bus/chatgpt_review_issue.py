@@ -15,6 +15,7 @@ import os
 from openai import OpenAI
 
 from review_bus.github_issue import (
+    find_comment_with_marker,
     get_issue,
     get_repo_context,
     list_issue_comments,
@@ -27,6 +28,30 @@ from review_bus.packet import (
     recent_context,
 )
 from review_bus.prompts import build_chatgpt_review_prompt
+from review_bus.router import upsert_bus_state
+from review_bus.state import (
+    BUS_STATE_MARKER,
+    STATUS_IN_PROGRESS,
+    BusState,
+    compute_packet_hash,
+    parse_bus_state_comment,
+)
+
+
+def _extract_verdict(review: str) -> str:
+    """Extract the verdict line from the ChatGPT review (the line after '## Verdict')."""
+    lines = review.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() == "## Verdict" and i + 1 < len(lines):
+            candidate = lines[i + 1].strip()
+            if candidate:
+                return candidate
+    # Fallback: scan for known verdict keywords (NO-RUN before RUN to avoid substring match)
+    for line in lines:
+        for kw in ("NO-RUN", "DESIGN BLOCKED", "NEEDS PATCH", "RUN"):
+            if kw in line:
+                return kw
+    return ""
 
 
 def _require_env(name: str) -> str:
@@ -84,6 +109,21 @@ def main() -> None:
     review = _call_openai(prompt)
 
     upsert_chatgpt_review_comment(owner, repo, issue_number, comments, review)
+
+    # Update bus state so the state machine tracks this review turn
+    state_comment = find_comment_with_marker(comments, BUS_STATE_MARKER)
+    state = (
+        parse_bus_state_comment(state_comment.get("body") or "")
+        if state_comment
+        else BusState()
+    )
+    state.status = STATUS_IN_PROGRESS
+    state.turn = state.turn + 1
+    state.last_actor = "chatgpt"
+    state.last_verdict = _extract_verdict(review)
+    state.packet_hash = compute_packet_hash(packet)
+    state.next_actor = ""
+    upsert_bus_state(owner, repo, issue_number, comments, state)
 
 
 if __name__ == "__main__":
