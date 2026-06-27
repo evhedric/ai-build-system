@@ -1,12 +1,12 @@
 ---
 name: AI Review Packet
-description: Cleanroom packet for GitHub Issue-based AI review
-title: "AI Review Bus — Cleanroom — <Task>"
-labels: []
-assignees: []
+about: Cleanroom packet for GitHub Issue-based AI review
+title: "AI Review Bus — Cleanroom — [Task]"
+labels: ""
+assignees: ""
 ---
 
-# Review Packet — <task name>
+# Review Packet — [task name]
 
 ## Decision requested
 
