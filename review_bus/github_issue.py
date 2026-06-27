@@ -106,6 +106,25 @@ def update_issue_comment(owner: str, repo: str, comment_id: int, body: str) -> d
     return _request("PATCH", url, body={"body": body})
 
 
+def create_issue(
+    owner: str,
+    repo: str,
+    title: str,
+    body: str,
+    labels: list[str] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"title": title, "body": body}
+    if labels:
+        payload["labels"] = labels
+    url = f"https://api.github.com/repos/{owner}/{repo}/issues"
+    return _request("POST", url, body=payload)
+
+
+def update_issue(owner: str, repo: str, issue_number: int, **fields: Any) -> dict[str, Any]:
+    url = f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}"
+    return _request("PATCH", url, body=dict(fields))
+
+
 def find_comment_with_marker(
     comments: list[dict[str, Any]],
     marker: str = CHATGPT_REVIEW_MARKER,
