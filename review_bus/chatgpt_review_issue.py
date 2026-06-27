@@ -5,7 +5,7 @@ Triggered by GitHub Actions when someone comments exactly:
     /chatgpt-review
 
 The script reads the latest Review Packet from the issue, asks OpenAI for a
-review, and posts the review as a new issue comment.
+review, and creates or updates the latest ChatGPT review issue comment.
 """
 
 from __future__ import annotations
@@ -15,10 +15,10 @@ import os
 from openai import OpenAI
 
 from review_bus.github_issue import (
-    create_issue_comment,
     get_issue,
     get_repo_context,
     list_issue_comments,
+    upsert_chatgpt_review_comment,
 )
 from review_bus.packet import (
     assert_exact_trigger,
@@ -83,7 +83,7 @@ def main() -> None:
 
     review = _call_openai(prompt)
 
-    create_issue_comment(owner, repo, issue_number, review)
+    upsert_chatgpt_review_comment(owner, repo, issue_number, comments, review)
 
 
 if __name__ == "__main__":

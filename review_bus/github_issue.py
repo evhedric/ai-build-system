@@ -12,6 +12,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+CHATGPT_REVIEW_MARKER = "<!-- ai-review-bus:chatgpt-latest -->"
+
 
 class GitHubApiError(RuntimeError):
     pass
@@ -97,3 +99,50 @@ def list_issue_comments(owner: str, repo: str, issue_number: int) -> list[dict[s
 def create_issue_comment(owner: str, repo: str, issue_number: int, body: str) -> dict[str, Any]:
     url = f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments"
     return _request("POST", url, body={"body": body})
+
+
+def update_issue_comment(owner: str, repo: str, comment_id: int, body: str) -> dict[str, Any]:
+    url = f"https://api.github.com/repos/{owner}/{repo}/issues/comments/{comment_id}"
+    return _request("PATCH", url, body={"body": body})
+
+
+def find_comment_with_marker(
+    comments: list[dict[str, Any]],
+    marker: str = CHATGPT_REVIEW_MARKER,
+) -> dict[str, Any] | None:
+    for comment in comments:
+        body = comment.get("body") or ""
+        if marker in body:
+            return comment
+    return None
+
+
+def format_chatgpt_review_comment(review: str) -> str:
+    trimmed_review = review.strip()
+    if not trimmed_review:
+        raise RuntimeError("Refusing to post an empty ChatGPT review.")
+
+    if not trimmed_review.startswith("# ChatGPT Review"):
+        trimmed_review = f"# ChatGPT Review\n\n{trimmed_review}"
+
+    return f"{CHATGPT_REVIEW_MARKER}\n{trimmed_review}\n"
+
+
+def upsert_chatgpt_review_comment(
+    owner: str,
+    repo: str,
+    issue_number: int,
+    comments: list[dict[str, Any]],
+    review: str,
+) -> dict[str, Any]:
+    body = format_chatgpt_review_comment(review)
+    existing = find_comment_with_marker(comments)
+
+    if existing is None:
+        return create_issue_comment(owner, repo, issue_number, body)
+
+    comment_id = existing.get("id")
+    if not isinstance(comment_id, int):
+        raise RuntimeError("Existing ChatGPT review comment is missing a numeric id.")
+
+    return update_issue_comment(owner, repo, comment_id, body)
