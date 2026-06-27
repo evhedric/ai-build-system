@@ -1,0 +1,37 @@
+name: ChatGPT Review
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  chatgpt-review:
+    if: >
+      contains(github.event.comment.body, '/chatgpt-review')
+      && !github.event.issue.pull_request
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run ChatGPT review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          TRIGGER_COMMENT_BODY: ${{ github.event.comment.body }}
+          REVIEW_OPENAI_MODEL: ${{ vars.REVIEW_OPENAI_MODEL || 'gpt-4o' }}
+          MAX_RECENT_COMMENTS: "12"
+        run: python -m review_bus.chatgpt_review_issue
